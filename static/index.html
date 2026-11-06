@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TeleCampaign Pro — Anti-Spam Telegram Marketing Suite</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f4f7fb; color: #0f172a; }
+    .nav-active { background-color: #1a2b88; color: #ffffff; box-shadow: 0 4px 12px rgba(26, 43, 136, 0.25); }
+    .badge-green { background: #dcfce7; color: #166534; }
+    .badge-red { background: #fee2e2; color: #991b1b; }
+    .badge-amber { background: #fef3c7; color: #92400e; }
+    .badge-blue { background: #dbeafe; color: #1e40af; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+  </style>
+</head>
+<body class="min-h-screen flex">
+
+  <!-- Sidebar -->
+  <aside class="w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0">
+    <div>
+      <div class="p-5 border-b border-slate-100 flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-[#1a2b88] text-white flex items-center justify-center font-extrabold text-lg shadow">TC</div>
+        <div>
+          <h1 class="font-extrabold text-base text-slate-900 leading-tight">TeleCampaign</h1>
+          <span class="text-[11px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">PRO UNLIMITED VPS</span>
+        </div>
+      </div>
+
+      <nav class="p-3 space-y-1">
+        <button onclick="switchTab('dashboard')" id="nav-dashboard" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition nav-active">
+          <span>📊</span> Dashboard
+        </button>
+        <button onclick="switchTab('accounts')" id="nav-accounts" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition">
+          <span>📱</span> Telegram Accounts
+        </button>
+        <button onclick="switchTab('groups')" id="nav-groups" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition">
+          <span>👥</span> Groups & Topics
+        </button>
+        <button onclick="switchTab('templates')" id="nav-templates" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition">
+          <span>📝</span> Message Templates
+        </button>
+        <button onclick="switchTab('campaigns')" id="nav-campaigns" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition">
+          <span>🚀</span> Campaigns
+        </button>
+        <button onclick="switchTab('proxies')" id="nav-proxies" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition">
+          <span>🛡️</span> Anti-Ban Proxies
+        </button>
+        <button onclick="switchTab('logs')" id="nav-logs" class="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition">
+          <span>📜</span> Live Delivery Logs
+        </button>
+      </nav>
+    </div>
+
+    <!-- Anti-Spam Shield Status Box -->
+    <div class="p-4 m-3 rounded-2xl bg-slate-900 text-white text-xs space-y-2">
+      <div class="flex items-center justify-between">
+        <span class="font-bold text-emerald-400 flex items-center gap-1.5">● Anti-Spam Shield</span>
+        <span class="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded font-bold">ACTIVE</span>
+      </div>
+      <p class="text-slate-400 leading-relaxed">
+        ✓ Saved Messages Forward<br>
+        ✓ Random Delay Jitter<br>
+        ✓ Pre-Check Group Rights<br>
+        ✓ FloodWait +5m Buffer<br>
+        ✓ Spintax & Typing Action
+      </p>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="flex-1 flex flex-col min-w-0">
+    <!-- Top Header -->
+    <header class="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between">
+      <div>
+        <h2 id="page-title" class="text-lg font-extrabold text-slate-900">Dashboard Overview</h2>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="refreshAll()" class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700">
+          🔄 Refresh Now
+        </button>
+        <button onclick="openCampaignModal()" class="px-4 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-xs font-bold text-white shadow">
+          + New Campaign
+        </button>
+      </div>
+    </header>
+
+    <!-- Dynamic Views Container -->
+    <div class="p-6 space-y-6 overflow-y-auto flex-1">
+
+      <!-- 1. DASHBOARD VIEW -->
+      <section id="view-dashboard" class="space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
+            <div class="text-xs font-bold text-slate-400 uppercase">Connected Accounts</div>
+            <div class="mt-2 flex items-baseline gap-2">
+              <span id="stat-accounts-conn" class="text-3xl font-extrabold text-slate-900">0</span>
+              <span class="text-xs text-slate-500">/ <span id="stat-accounts-total">0</span> total</span>
+            </div>
+          </div>
+          <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
+            <div class="text-xs font-bold text-slate-400 uppercase">Writable Groups & Topics</div>
+            <div class="mt-2 flex items-baseline gap-2">
+              <span id="stat-groups-post" class="text-3xl font-extrabold text-emerald-600">0</span>
+              <span class="text-xs text-slate-500">/ <span id="stat-groups-total">0</span> synced</span>
+            </div>
+          </div>
+          <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
+            <div class="text-xs font-bold text-slate-400 uppercase">Active Campaigns</div>
+            <div class="mt-2 flex items-baseline gap-2">
+              <span id="stat-camp-run" class="text-3xl font-extrabold text-[#1a2b88]">0</span>
+              <span class="text-xs text-slate-500">/ <span id="stat-camp-total">0</span> total</span>
+            </div>
+          </div>
+          <div class="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
+            <div class="text-xs font-bold text-slate-400 uppercase">Messages Delivered</div>
+            <div class="mt-2 flex items-baseline gap-2">
+              <span id="stat-sent" class="text-3xl font-extrabold text-emerald-600">0</span>
+              <span class="text-xs text-rose-500">(<span id="stat-failed">0</span> cooldown/err)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Workflow Banner -->
+        <div class="bg-gradient-to-r from-[#1a2b88] to-indigo-800 rounded-2xl p-6 text-white flex flex-col md:flex-row items-center justify-between gap-4 shadow">
+          <div>
+            <h3 class="text-lg font-extrabold">How TeleCampaign Anti-Ban Workflow Works</h3>
+            <p class="text-xs text-indigo-100 mt-1">
+              1. Connect Account (Phone OTP / QR / Session) → 2. Sync Groups & Check Posting Permissions → 3. Pick Saved Message or Spintax Template → 4. Launch Safe Campaign!
+            </p>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <button onclick="switchTab('accounts')" class="px-4 py-2.5 rounded-xl bg-white text-[#1a2b88] font-bold text-xs shadow">Connect Account</button>
+            <button onclick="openCampaignModal()" class="px-4 py-2.5 rounded-xl bg-emerald-500 text-white font-bold text-xs shadow">Start Campaign</button>
+          </div>
+        </div>
+
+        <!-- Recent Activity Table -->
+        <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 class="font-bold text-sm text-slate-800">Recent Campaign Deliveries & Anti-Spam Events</h3>
+            <button onclick="switchTab('logs')" class="text-xs font-bold text-[#1a2b88] hover:underline">View All →</button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="bg-slate-50 text-slate-500 border-b border-slate-100">
+                  <th class="p-3 font-bold">Time</th>
+                  <th class="p-3 font-bold">Destination Group / Topic</th>
+                  <th class="p-3 font-bold">Round</th>
+                  <th class="p-3 font-bold">Status</th>
+                  <th class="p-3 font-bold">Details / Anti-Spam Guard</th>
+                </tr>
+              </thead>
+              <tbody id="dash-logs-body" class="divide-y divide-slate-100"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. ACCOUNTS VIEW -->
+      <section id="view-accounts" class="hidden space-y-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="font-extrabold text-base text-slate-900">Telegram Accounts</h3>
+            <p class="text-xs text-slate-500">Connect unlimited accounts via Phone OTP, QR Code Scan, or Telethon Session String.</p>
+          </div>
+          <button onclick="openAccountModal()" class="px-4 py-2.5 rounded-xl bg-[#1a2b88] text-white text-xs font-bold shadow">
+            + Add Telegram Account
+          </button>
+        </div>
+        <div id="accounts-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+      </section>
+
+      <!-- 3. GROUPS & TOPICS VIEW -->
+      <section id="view-groups" class="hidden space-y-4">
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3 flex-wrap">
+            <input id="group-search" oninput="renderGroups()" type="text" placeholder="Search groups or topics..." class="h-10 px-3.5 rounded-xl border border-slate-200 text-xs font-semibold outline-none focus:border-[#1a2b88] w-64" />
+            <select id="group-filter-perm" onchange="renderGroups()" class="h-10 px-3 rounded-xl border border-slate-200 text-xs font-semibold outline-none">
+              <option value="all">All Permissions</option>
+              <option value="can_post">✅ Can Post Only</option>
+              <option value="no_post">🚫 Restricted / No Permission</option>
+            </select>
+          </div>
+          <span id="group-count-badge" class="text-xs font-bold text-slate-600">0 destinations</span>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+          <table class="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr class="bg-slate-50 text-slate-500 border-b border-slate-100">
+                <th class="p-3 font-bold">Group / Topic Title</th>
+                <th class="p-3 font-bold">Type</th>
+                <th class="p-3 font-bold">Account</th>
+                <th class="p-3 font-bold">Slowmode</th>
+                <th class="p-3 font-bold">Posting Status</th>
+              </tr>
+            </thead>
+            <tbody id="groups-table-body" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 4. MESSAGE TEMPLATES VIEW -->
+      <section id="view-templates" class="hidden space-y-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="font-extrabold text-base text-slate-900">Message Templates & Saved Messages Forwarder</h3>
+            <p class="text-xs text-slate-500">Use Native "Saved Messages" Forwarding (best anti-spam) or Spintax Text <code class="bg-slate-200 px-1 rounded">{Hello|Hi|Hey}</code> so every message hash is unique.</p>
+          </div>
+          <button onclick="openTemplateModal()" class="px-4 py-2.5 rounded-xl bg-[#1a2b88] text-white text-xs font-bold shadow">
+            + Create Template
+          </button>
+        </div>
+        <div id="templates-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+      </section>
+
+      <!-- 5. CAMPAIGNS VIEW -->
+      <section id="view-campaigns" class="hidden space-y-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="font-extrabold text-base text-slate-900">Automated Marketing Campaigns</h3>
+            <p class="text-xs text-slate-500">Full loop control, randomized delay jitter between groups, round spacing, pause/resume & clone.</p>
+          </div>
+          <button onclick="openCampaignModal()" class="px-4 py-2.5 rounded-xl bg-[#1a2b88] text-white text-xs font-bold shadow">
+            + Create Campaign
+          </button>
+        </div>
+        <div id="campaigns-list" class="space-y-4"></div>
+      </section>
+
+      <!-- 6. PROXIES VIEW -->
+      <section id="view-proxies" class="hidden space-y-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="font-extrabold text-base text-slate-900">Anti-Ban SOCKS5 / HTTP Proxies</h3>
+            <p class="text-xs text-slate-500">Assign separate proxies when running multiple Telegram accounts to prevent IP correlation bans.</p>
+          </div>
+          <button onclick="openProxyModal()" class="px-4 py-2.5 rounded-xl bg-[#1a2b88] text-white text-xs font-bold shadow">
+            + Add Proxy
+          </button>
+        </div>
+        <div id="proxies-list" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+      </section>
+
+      <!-- 7. LIVE LOGS VIEW -->
+      <section id="view-logs" class="hidden space-y-4">
+        <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 class="font-extrabold text-sm text-slate-900">Live Delivery & Anti-Spam Audit Log (Last 200 Actions)</h3>
+            <button onclick="loadLogs()" class="text-xs font-bold text-[#1a2b88]">🔄 Refresh</button>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="bg-slate-50 text-slate-500 border-b border-slate-100">
+                  <th class="p-3 font-bold">Time</th>
+                  <th class="p-3 font-bold">Campaign</th>
+                  <th class="p-3 font-bold">Account</th>
+                  <th class="p-3 font-bold">Group / Topic</th>
+                  <th class="p-3 font-bold">Round</th>
+                  <th class="p-3 font-bold">Status</th>
+                  <th class="p-3 font-bold">Response / Anti-Spam Action</th>
+                </tr>
+              </thead>
+              <tbody id="full-logs-body" class="divide-y divide-slate-100"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- ADD ACCOUNT MODAL -->
+  <div id="modal-account" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+      <div class="flex items-center justify-between border-b pb-3">
+        <h3 class="font-extrabold text-base">Add Telegram Account</h3>
+        <button onclick="closeModal('modal-account')" class="text-slate-400 hover:text-slate-700 font-bold">✕</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-bold mb-1">Account Label</label>
+          <input id="acc-name" type="text" placeholder="e.g. Main Marketing Account" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+        </div>
+        <div>
+          <label class="block font-bold mb-1">Phone Number (with country code, e.g. +92300...)</label>
+          <input id="acc-phone" type="text" placeholder="+923001234567 (Leave blank if using QR or Session)" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-bold mb-1">Telegram API ID</label>
+            <input id="acc-api-id" type="number" value="2040" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+          <div>
+            <label class="block font-bold mb-1">Telegram API Hash</label>
+            <input id="acc-api-hash" type="text" value="b18441a1ff607e10a989891a5462e627" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-bold mb-1">Daily Safe Quota</label>
+            <input id="acc-quota" type="number" value="1500" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+          <div>
+            <label class="block font-bold mb-1">Proxy (Optional)</label>
+            <select id="acc-proxy" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold">
+              <option value="">Direct Connection (VPS IP)</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block font-bold mb-1">Telethon Session String (Optional — Direct Instant Login)</label>
+          <input id="acc-session" type="text" placeholder="Paste StringSession if you already have one" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('modal-account')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancel</button>
+        <button onclick="submitAccount()" class="px-4 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">Save Account</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOGIN OTP / QR MODAL -->
+  <div id="modal-login" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+      <div class="flex items-center justify-between border-b pb-3">
+        <h3 id="login-modal-title" class="font-extrabold text-base">Connect Telegram Account</h3>
+        <button onclick="closeModal('modal-login')" class="text-slate-400 hover:text-slate-700 font-bold">✕</button>
+      </div>
+      <div id="login-modal-body" class="space-y-4 text-xs"></div>
+    </div>
+  </div>
+
+  <!-- CREATE TEMPLATE MODAL -->
+  <div id="modal-template" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-xl">
+      <div class="flex items-center justify-between border-b pb-3">
+        <h3 class="font-extrabold text-base">Create Message Template</h3>
+        <button onclick="closeModal('modal-template')" class="text-slate-400 hover:text-slate-700 font-bold">✕</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-bold mb-1">Template Name</label>
+          <input id="tmpl-name" type="text" placeholder="e.g. Main Promo Post" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+        </div>
+        <div>
+          <label class="block font-bold mb-1">Sending Mode (Anti-Spam Strategy)</label>
+          <select id="tmpl-mode" onchange="toggleTemplateMode()" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold">
+            <option value="forward">⭐ Forward from Saved Messages (Recommended — Preserves Media & Emojis)</option>
+            <option value="text">📝 Custom Text / HTML with Spintax {Hi|Hello|Hey}</option>
+          </select>
+        </div>
+
+        <!-- Forward Mode Fields -->
+        <div id="tmpl-forward-box" class="space-y-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+          <div>
+            <label class="block font-bold mb-1">Select Source Telegram Account</label>
+            <div class="flex gap-2">
+              <select id="tmpl-src-acc" class="flex-1 h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold"></select>
+              <button type="button" onclick="loadSavedMessagesForTemplate()" class="px-3 py-2 rounded-xl bg-[#1a2b88] text-white font-bold">Load Saved Messages</button>
+            </div>
+          </div>
+          <div>
+            <label class="block font-bold mb-1">Pick Message from 'Saved Messages'</label>
+            <select id="tmpl-src-msg" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold">
+              <option value="">Click 'Load Saved Messages' first...</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Text Mode Fields -->
+        <div id="tmpl-text-box" class="hidden space-y-2">
+          <label class="block font-bold">Message Content (HTML & Spintax Supported)</label>
+          <textarea id="tmpl-content" rows="5" placeholder="{Hello|Hi|Hey} everyone! Check out our new offer...&#10;&#10;Use {{time}} or {{rand}} to make every message unique!" class="w-full p-3 rounded-xl border border-slate-200 font-medium"></textarea>
+          <p class="text-[11px] text-emerald-700 bg-emerald-50 p-2 rounded-lg">
+            💡 <b>Anti-Spam Tip:</b> Use Spintax like <code>{🔥|⚡|💎} {Special|Exclusive} Offer</code> so Telegram never sees identical message hashes!
+          </p>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('modal-template')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancel</button>
+        <button onclick="submitTemplate()" class="px-4 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">Save Template</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CREATE CAMPAIGN MODAL (Matches tele.khaimmo.shop) -->
+  <div id="modal-campaign" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-xl max-h-[92vh] flex flex-col">
+      <div class="flex items-center justify-between border-b pb-3">
+        <h3 class="font-extrabold text-base">Create Automated Campaign (TeleCampaign Engine)</h3>
+        <button onclick="closeModal('modal-campaign')" class="text-slate-400 hover:text-slate-700 font-bold">✕</button>
+      </div>
+
+      <div class="space-y-4 text-xs overflow-y-auto pr-1 flex-1">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="block font-bold mb-1">Campaign Name</label>
+            <input id="camp-name" type="text" placeholder="e.g. Daily Group Promo #1" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+          <div>
+            <label class="block font-bold mb-1">Telegram Account</label>
+            <select id="camp-account" onchange="onCampaignAccountChange()" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold"></select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-bold mb-1">Message Template</label>
+          <select id="camp-template" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold"></select>
+        </div>
+
+        <!-- Destinations Picker with Permission Filter -->
+        <div class="border border-slate-200 rounded-2xl p-3.5 space-y-2.5 bg-slate-50">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <span class="font-extrabold text-slate-800">Select Destination Groups & Topics (<span id="camp-selected-count">0</span> selected)</span>
+            <div class="flex gap-2">
+              <button type="button" onclick="syncAccountFromCampaignModal()" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-[#1a2b88]">🔄 Sync Groups</button>
+              <button type="button" onclick="toggleSelectAllCampaignGroups(true)" class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold">Select All Writable</button>
+              <button type="button" onclick="toggleSelectAllCampaignGroups(false)" class="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-700 font-bold">Deselect All</button>
+            </div>
+          </div>
+          <input id="camp-group-search" oninput="renderCampaignDestinationsPicker()" type="text" placeholder="Filter groups by name..." class="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-semibold" />
+          <div id="camp-destinations-box" class="max-h-44 overflow-y-auto space-y-1.5 bg-white p-2 rounded-xl border border-slate-200"></div>
+        </div>
+
+        <!-- Anti-Spam Timing & Loop Controls -->
+        <div class="border border-emerald-200 bg-emerald-50/50 rounded-2xl p-4 space-y-3">
+          <div class="font-extrabold text-emerald-900 flex items-center justify-between">
+            <span>🛡️ Anti-Spam Timing, Jitter & Loop Controls</span>
+            <span class="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">Safe Delivery Mode</span>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div>
+              <label class="block font-bold mb-1 text-slate-700">Repeat Loops</label>
+              <input id="camp-repeats" type="number" value="300" min="1" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-bold" />
+              <span class="text-[10px] text-slate-500">Recommended: 300</span>
+            </div>
+            <div>
+              <label class="block font-bold mb-1 text-slate-700">Delay Min (sec)</label>
+              <input id="camp-delay-min" type="number" value="20" min="3" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-bold" />
+              <span class="text-[10px] text-slate-500">Between groups</span>
+            </div>
+            <div>
+              <label class="block font-bold mb-1 text-slate-700">Delay Max (sec)</label>
+              <input id="camp-delay-max" type="number" value="45" min="5" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-bold" />
+              <span class="text-[10px] text-slate-500">Random jitter max</span>
+            </div>
+            <div>
+              <label class="block font-bold mb-1 text-slate-700">Round Wait (min)</label>
+              <input id="camp-round-wait" type="number" value="15" min="1" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-bold" />
+              <span class="text-[10px] text-slate-500">Wait before next loop</span>
+            </div>
+          </div>
+          <div class="flex items-center justify-between pt-1">
+            <label class="flex items-center gap-2 font-semibold text-slate-700 cursor-pointer">
+              <input id="camp-typing" type="checkbox" checked class="w-4 h-4 rounded" />
+              Simulate human "typing..." status before sending text messages
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-3 border-t">
+        <button onclick="closeModal('modal-campaign')" class="px-4 py-2.5 rounded-xl border text-xs font-bold">Cancel</button>
+        <button onclick="submitCampaign()" class="px-5 py-2.5 rounded-xl bg-[#1a2b88] text-white text-xs font-bold shadow">🚀 Start Campaign Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD PROXY MODAL -->
+  <div id="modal-proxy" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+      <div class="flex items-center justify-between border-b pb-3">
+        <h3 class="font-extrabold text-base">Add Proxy Server</h3>
+        <button onclick="closeModal('modal-proxy')" class="text-slate-400 hover:text-slate-700 font-bold">✕</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-bold mb-1">Proxy Label</label>
+          <input id="proxy-name" type="text" placeholder="e.g. SG Residential Proxy 1" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block font-bold mb-1">Protocol</label>
+            <select id="proxy-type" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold">
+              <option value="socks5">SOCKS5</option>
+              <option value="http">HTTP</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-bold mb-1">Host / IP</label>
+            <input id="proxy-host" type="text" placeholder="1.2.3.4" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+          <div>
+            <label class="block font-bold mb-1">Port</label>
+            <input id="proxy-port" type="number" placeholder="1080" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-bold mb-1">Username (Optional)</label>
+            <input id="proxy-user" type="text" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+          <div>
+            <label class="block font-bold mb-1">Password (Optional)</label>
+            <input id="proxy-pass" type="password" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeModal('modal-proxy')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancel</button>
+        <button onclick="submitProxy()" class="px-4 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">Save Proxy</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let STATE = {
+      accounts: [],
+      destinations: [],
+      templates: [],
+      campaigns: [],
+      proxies: [],
+      selectedCampaignDestinations: new Set(),
+      qrPollTimer: null
+    };
+
+    const TABS = ['dashboard', 'accounts', 'groups', 'templates', 'campaigns', 'proxies', 'logs'];
+
+    function switchTab(tab) {
+      TABS.forEach(t => {
+        document.getElementById(`view-${t}`).classList.toggle('hidden', t !== tab);
+        const navBtn = document.getElementById(`nav-${t}`);
+        if (t === tab) {
+          navBtn.classList.add('nav-active');
+          navBtn.classList.remove('text-slate-600');
+        } else {
+          navBtn.classList.remove('nav-active');
+          navBtn.classList.add('text-slate-600');
+        }
+      });
+      const titles = {
+        dashboard: 'Dashboard Overview',
+        accounts: 'Telegram Accounts Management',
+        groups: 'Synced Groups, Channels & Forum Topics',
+        templates: 'Message Templates & Saved Messages Forwarder',
+        campaigns: 'Automated Campaigns & Anti-Spam Scheduler',
+        proxies: 'Proxy Servers',
+        logs: 'Live Delivery & Anti-Spam Logs'
+      };
+      document.getElementById('page-title').innerText = titles[tab] || 'TeleCampaign';
+      refreshAll();
+    }
+
+    async function api(url, opts = {}) {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Operation failed');
+      return data;
+    }
+
+    function openModal(id) {
+      const el = document.getElementById(id);
+      el.classList.remove('hidden');
+      el.classList.add('flex');
+    }
+
+    function closeModal(id) {
+      const el = document.getElementById(id);
+      el.classList.add('hidden');
+      el.classList.remove('flex');
+      if (id === 'modal-login' && STATE.qrPollTimer) {
+        clearInterval(STATE.qrPollTimer);
+        STATE.qrPollTimer = null;
+      }
+    }
+
+    function statusBadge(status) {
+      const map = {
+        connected: 'badge-green',
+        running: 'badge-green',
+        sent: 'badge-green',
+        online: 'badge-green',
+        paused: 'badge-amber',
+        cooldown: 'badge-amber',
+        skipped: 'badge-amber',
+        completed: 'badge-blue',
+        failed: 'badge-red',
+        disconnected: 'badge-red',
+        offline: 'badge-red'
+      };
+      const cls = map[status] || 'badge-blue';
+      return `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase ${cls}">${status}</span>`;
+    }
+
+    async function refreshAll() {
+      try {
+        const [dash, accounts, destinations, templates, campaigns, proxies] = await Promise.all([
+          api('/api/dashboard'),
+          api('/api/telegram/accounts'),
+          api('/api/destinations'),
+          api('/api/message-templates'),
+          api('/api/campaigns'),
+          api('/api/proxies')
+        ]);
+        STATE.accounts = accounts;
+        STATE.destinations = destinations;
+        STATE.templates = templates;
+        STATE.campaigns = campaigns;
+        STATE.proxies = proxies;
+
+        // Update stats
+        document.getElementById('stat-accounts-conn').innerText = dash.accounts_connected;
+        document.getElementById('stat-accounts-total').innerText = dash.accounts_total;
+        document.getElementById('stat-groups-post').innerText = dash.groups_can_post;
+        document.getElementById('stat-groups-total').innerText = dash.groups_total;
+        document.getElementById('stat-camp-run').innerText = dash.campaigns_running;
+        document.getElementById('stat-camp-total').innerText = dash.campaigns_total;
+        document.getElementById('stat-sent').innerText = dash.sent_total;
+        document.getElementById('stat-failed').innerText = dash.failed_total;
+
+        // Render dashboard logs
+        const dashLogs = document.getElementById('dash-logs-body');
+        dashLogs.innerHTML = dash.recent_logs.length ? dash.recent_logs.map(l => `
+          <tr class="hover:bg-slate-50">
+            <td class="p-3 text-slate-500">${new Date(l.created_at).toLocaleTimeString()}</td>
+            <td class="p-3 font-bold text-slate-800">${l.destination_title || '-'}</td>
+            <td class="p-3 font-semibold">#${l.round_number || 1}</td>
+            <td class="p-3">${statusBadge(l.status)}</td>
+            <td class="p-3 text-slate-600">${l.reason || ''}</td>
+          </tr>
+        `).join('') : `<tr><td colspan="5" class="p-6 text-center text-slate-400">No deliveries recorded yet. Start a campaign to see live anti-spam logs!</td></tr>`;
+
+        renderAccounts();
+        renderGroups();
+        renderTemplates();
+        renderCampaigns();
+        renderProxies();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // ==================== ACCOUNTS ====================
+    function openAccountModal() {
+      const sel = document.getElementById('acc-proxy');
+      sel.innerHTML = `<option value="">Direct Connection (VPS IP)</option>` +
+        STATE.proxies.map(p => `<option value="${p.id}">${p.name} (${p.host}:${p.port})</option>`).join('');
+      openModal('modal-account');
+    }
+
+    async function submitAccount() {
+      try {
+        const proxyVal = document.getElementById('acc-proxy').value;
+        await api('/api/telegram/accounts', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.getElementById('acc-name').value || 'Telegram Account',
+            phone: document.getElementById('acc-phone').value,
+            api_id: Number(document.getElementById('acc-api-id').value || 2040),
+            api_hash: document.getElementById('acc-api-hash').value || 'b18441a1ff607e10a989891a5462e627',
+            daily_quota: Number(document.getElementById('acc-quota').value || 1500),
+            proxy_id: proxyVal ? Number(proxyVal) : null,
+            session_string: document.getElementById('acc-session').value
+          })
+        });
+        closeModal('modal-account');
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function renderAccounts() {
+      const box = document.getElementById('accounts-list');
+      if (!STATE.accounts.length) {
+        box.innerHTML = `<div class="col-span-2 bg-white p-8 rounded-2xl border text-center text-slate-400 text-xs">No Telegram accounts added yet. Click "+ Add Telegram Account" to connect.</div>`;
+        return;
+      }
+      box.innerHTML = STATE.accounts.map(a => `
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+          <div class="flex items-start justify-between">
+            <div>
+              <h4 class="font-extrabold text-sm text-slate-900">${a.name}</h4>
+              <p class="text-xs text-slate-500">${a.phone || 'No phone set'} ${a.username ? `· @${a.username}` : ''}</p>
+            </div>
+            ${statusBadge(a.status)}
+          </div>
+          <div class="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl text-xs">
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Daily Quota</span>
+              <span class="font-extrabold text-slate-800">${a.sent_today} / ${a.daily_quota}</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Writable Groups</span>
+              <span class="font-extrabold text-emerald-600">${a.writable_group_count || 0} / ${a.group_count || 0}</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Proxy</span>
+              <span class="font-bold text-slate-700">${a.proxy_name || 'Direct VPS'}</span>
+            </div>
+          </div>
+          ${a.cooldown_until ? `<div class="text-[11px] bg-amber-50 text-amber-800 px-3 py-1.5 rounded-lg font-semibold">⏳ Cooldown active until: ${new Date(a.cooldown_until).toLocaleTimeString()}</div>` : ''}
+          <div class="flex flex-wrap gap-2 pt-1">
+            ${a.status !== 'connected' ? `
+              <button onclick="startPhoneLogin(${a.id})" class="px-3 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">📲 Login via Phone OTP</button>
+              <button onclick="startQrLogin(${a.id})" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">📷 Scan QR Code</button>
+            ` : `
+              <button onclick="syncAccount(${a.id}, this)" class="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">🔄 Sync Groups & Topics</button>
+            `}
+            <button onclick="deleteAccount(${a.id})" class="px-3 py-2 rounded-xl border border-rose-200 text-rose-600 text-xs font-bold ml-auto">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function startPhoneLogin(accId) {
+      try {
+        await api(`/api/telegram/accounts/${accId}/login`, { method: 'POST' });
+        const body = document.getElementById('login-modal-body');
+        body.innerHTML = `
+          <p class="text-slate-600 font-medium">Telegram has sent a 5-digit login code to your Telegram app.</p>
+          <div>
+            <label class="block font-bold mb-1">Enter OTP Code</label>
+            <input id="otp-code-input" type="text" placeholder="12345" class="w-full h-10 px-3 rounded-xl border font-bold text-base tracking-widest" />
+          </div>
+          <div>
+            <label class="block font-bold mb-1">2FA Cloud Password (only if enabled on your account)</label>
+            <input id="otp-pass-input" type="password" placeholder="Optional 2FA password" class="w-full h-10 px-3 rounded-xl border font-semibold" />
+          </div>
+          <button onclick="confirmOtpCode(${accId})" class="w-full py-2.5 rounded-xl bg-[#1a2b88] text-white font-bold">Verify & Connect Account</button>
+        `;
+        openModal('modal-login');
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function confirmOtpCode(accId) {
+      try {
+        const code = document.getElementById('otp-code-input').value;
+        const password = document.getElementById('otp-pass-input').value;
+        const res = await api(`/api/telegram/accounts/${accId}/login/code`, {
+          method: 'POST',
+          body: JSON.stringify({ code, password: password || null })
+        });
+        if (res.status === '2fa_required') {
+          alert('Please enter your 2FA password in the password box and click Verify again.');
+          return;
+        }
+        closeModal('modal-login');
+        await syncAccount(accId);
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function startQrLogin(accId) {
+      try {
+        const res = await api(`/api/telegram/accounts/${accId}/login/qr`, { method: 'POST' });
+        const body = document.getElementById('login-modal-body');
+        body.innerHTML = `
+          <div class="text-center space-y-3">
+            <p class="text-slate-600 font-semibold">Open Telegram on your phone → <b>Settings → Devices → Link Desktop Device</b> and scan this QR code:</p>
+            <img src="${res.qr_image}" class="w-56 h-56 mx-auto rounded-2xl border p-2 shadow" />
+            <div id="qr-status-text" class="text-xs font-bold text-indigo-600 animate-pulse">Waiting for QR scan...</div>
+          </div>
+        `;
+        openModal('modal-login');
+        if (STATE.qrPollTimer) clearInterval(STATE.qrPollTimer);
+        STATE.qrPollTimer = setInterval(async () => {
+          const st = await api(`/api/telegram/accounts/${accId}/login/qr/status`);
+          if (st.status === 'connected') {
+            clearInterval(STATE.qrPollTimer);
+            closeModal('modal-login');
+            await syncAccount(accId);
+            refreshAll();
+          } else if (st.status === '2fa_required') {
+            clearInterval(STATE.qrPollTimer);
+            body.innerHTML = `
+              <p class="text-amber-700 font-bold">QR Scanned! Your account has Two-Step Verification (2FA) enabled.</p>
+              <input id="qr-2fa-pass" type="password" placeholder="Enter your 2FA password" class="w-full h-10 px-3 rounded-xl border font-semibold" />
+              <button onclick="submitQr2FA(${accId})" class="w-full py-2.5 rounded-xl bg-[#1a2b88] text-white font-bold">Confirm 2FA Password</button>
+            `;
+          }
+        }, 2500);
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function submitQr2FA(accId) {
+      try {
+        const password = document.getElementById('qr-2fa-pass').value;
+        await api(`/api/telegram/accounts/${accId}/login/password`, {
+          method: 'POST',
+          body: JSON.stringify({ password })
+        });
+        closeModal('modal-login');
+        await syncAccount(accId);
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function syncAccount(accId, btn) {
+      const oldText = btn ? btn.innerText : '';
+      if (btn) { btn.innerText = '⏳ Syncing...'; btn.disabled = true; }
+      try {
+        const res = await api(`/api/telegram/accounts/${accId}/sync`, { method: 'POST' });
+        alert(`Synced ${res.count} groups, channels & forum topics with permission checks!`);
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        if (btn) { btn.innerText = oldText; btn.disabled = false; }
+      }
+    }
+
+    async function deleteAccount(id) {
+      if (!confirm('Delete this Telegram account?')) return;
+      await api(`/api/telegram/accounts/${id}`, { method: 'DELETE' });
+      refreshAll();
+    }
+
+    // ==================== GROUPS ====================
+    function renderGroups() {
+      const q = (document.getElementById('group-search')?.value || '').toLowerCase();
+      const perm = document.getElementById('group-filter-perm')?.value || 'all';
+      const filtered = STATE.destinations.filter(d => {
+        if (perm === 'can_post' && !d.can_post) return false;
+        if (perm === 'no_post' && d.can_post) return false;
+        const title = `${d.parent_title ? d.parent_title + ' › ' : ''}${d.title}`.toLowerCase();
+        return !q || title.includes(q);
+      });
+      document.getElementById('group-count-badge').innerText = `${filtered.length} destinations`;
+      const tbody = document.getElementById('groups-table-body');
+      tbody.innerHTML = filtered.length ? filtered.map(d => `
+        <tr class="hover:bg-slate-50">
+          <td class="p-3 font-bold text-slate-900">
+            ${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}
+            ${d.username ? `<span class="text-slate-400 font-normal ml-1">@${d.username}</span>` : ''}
+          </td>
+          <td class="p-3 uppercase text-[11px] font-bold text-slate-500">${d.kind}</td>
+          <td class="p-3 font-semibold text-slate-700">${d.account_name || '-'}</td>
+          <td class="p-3 text-slate-600">${d.slowmode_seconds ? `${d.slowmode_seconds}s` : 'None'}</td>
+          <td class="p-3">
+            ${d.can_post
+              ? `<span class="badge-green px-2.5 py-0.5 rounded-full text-[11px] font-bold">✅ Can Post</span>`
+              : `<span class="badge-red px-2.5 py-0.5 rounded-full text-[11px] font-bold">🚫 Restricted</span>`}
+            ${d.restriction_until ? `<span class="text-[10px] text-amber-700 block mt-0.5">Until ${new Date(d.restriction_until).toLocaleTimeString()}</span>` : ''}
+          </td>
+        </tr>
+      `).join('') : `<tr><td colspan="5" class="p-6 text-center text-slate-400">No groups synced yet. Connect an account and click "Sync Groups & Topics".</td></tr>`;
+    }
+
+    // ==================== TEMPLATES ====================
+    function openTemplateModal() {
+      const sel = document.getElementById('tmpl-src-acc');
+      const connected = STATE.accounts.filter(a => a.status === 'connected');
+      sel.innerHTML = connected.length
+        ? connected.map(a => `<option value="${a.id}">${a.name} (${a.phone || a.username})</option>`).join('')
+        : `<option value="">No connected account available</option>`;
+      toggleTemplateMode();
+      openModal('modal-template');
+    }
+
+    function toggleTemplateMode() {
+      const mode = document.getElementById('tmpl-mode').value;
+      document.getElementById('tmpl-forward-box').classList.toggle('hidden', mode !== 'forward');
+      document.getElementById('tmpl-text-box').classList.toggle('hidden', mode !== 'text');
+    }
+
+    async function loadSavedMessagesForTemplate() {
+      const accId = document.getElementById('tmpl-src-acc').value;
+      if (!accId) return alert('Select a connected Telegram account first');
+      const sel = document.getElementById('tmpl-src-msg');
+      sel.innerHTML = `<option value="">⏳ Loading Saved Messages from Telegram...</option>`;
+      try {
+        const msgs = await api(`/api/telegram/accounts/${accId}/saved-messages`);
+        sel.innerHTML = msgs.length
+          ? msgs.map(m => `<option value="${m.id}" data-text="${encodeURIComponent(m.text)}">[#${m.id} · ${m.media_type.toUpperCase()}] ${m.text.slice(0, 80)}</option>`).join('')
+          : `<option value="">No messages found in your 'Saved Messages' chat!</option>`;
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function submitTemplate() {
+      try {
+        const name = document.getElementById('tmpl-name').value;
+        const mode = document.getElementById('tmpl-mode').value;
+        let content = document.getElementById('tmpl-content').value;
+        let srcAcc = null, srcMsg = null;
+
+        if (mode === 'forward') {
+          srcAcc = Number(document.getElementById('tmpl-src-acc').value);
+          const msgSel = document.getElementById('tmpl-src-msg');
+          srcMsg = Number(msgSel.value);
+          if (!srcAcc || !srcMsg) return alert('Please load and select a message from Saved Messages.');
+          const opt = msgSel.options[msgSel.selectedIndex];
+          content = decodeURIComponent(opt.getAttribute('data-text') || 'Forwarded Saved Message');
+        }
+
+        await api('/api/message-templates', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: name || 'Message Template',
+            mode,
+            content,
+            source_account_id: srcAcc,
+            source_message_id: srcMsg
+          })
+        });
+        closeModal('modal-template');
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function renderTemplates() {
+      const box = document.getElementById('templates-list');
+      if (!STATE.templates.length) {
+        box.innerHTML = `<div class="col-span-2 bg-white p-8 rounded-2xl border text-center text-slate-400 text-xs">No templates created yet. Click "+ Create Template" to add a Saved Message forwarder or Spintax text template.</div>`;
+        return;
+      }
+      box.innerHTML = STATE.templates.map(t => `
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between space-y-3">
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <h4 class="font-extrabold text-sm text-slate-900">${t.name}</h4>
+              <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold ${t.mode === 'forward' ? 'badge-blue' : 'badge-green'}">
+                ${t.mode === 'forward' ? `↪ Forward Saved Msg #${t.source_message_id}` : '📝 Spintax / Text'}
+              </span>
+            </div>
+            <p class="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl whitespace-pre-wrap line-clamp-3">${t.content || ''}</p>
+          </div>
+          <div class="flex items-center justify-between pt-2 text-xs text-slate-400">
+            <span>${t.source_account_name ? `Source: ${t.source_account_name}` : 'All Accounts Compatible'}</span>
+            <button onclick="deleteTemplate(${t.id})" class="text-rose-600 font-bold hover:underline">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function deleteTemplate(id) {
+      if (!confirm('Delete this template?')) return;
+      await api(`/api/message-templates/${id}`, { method: 'DELETE' });
+      refreshAll();
+    }
+
+    // ==================== CAMPAIGNS ====================
+    function openCampaignModal() {
+      STATE.selectedCampaignDestinations.clear();
+      const accSel = document.getElementById('camp-account');
+      const connected = STATE.accounts.filter(a => a.status === 'connected');
+      accSel.innerHTML = connected.length
+        ? connected.map(a => `<option value="${a.id}">${a.name} (${a.phone || a.username})</option>`).join('')
+        : `<option value="">Connect a Telegram account first</option>`;
+
+      onCampaignAccountChange();
+      openModal('modal-campaign');
+    }
+
+    function onCampaignAccountChange() {
+      const accId = Number(document.getElementById('camp-account').value);
+      STATE.selectedCampaignDestinations.clear();
+
+      // Filter templates compatible with this account (like tele.khaimmo.shop)
+      const tmplSel = document.getElementById('camp-template');
+      const compatibleTemplates = STATE.templates.filter(t => t.mode !== 'forward' || t.source_account_id === accId);
+      tmplSel.innerHTML = compatibleTemplates.length
+        ? compatibleTemplates.map(t => `<option value="${t.id}">[${t.mode.toUpperCase()}] ${t.name}</option>`).join('')
+        : `<option value="">No template for this account — Create a Template first</option>`;
+
+      renderCampaignDestinationsPicker();
+    }
+
+    function renderCampaignDestinationsPicker() {
+      const accId = Number(document.getElementById('camp-account').value);
+      const q = (document.getElementById('camp-group-search')?.value || '').toLowerCase();
+      const groups = STATE.destinations.filter(d => d.account_id === accId && (!q || d.title.toLowerCase().includes(q) || (d.parent_title || '').toLowerCase().includes(q)));
+
+      document.getElementById('camp-selected-count').innerText = STATE.selectedCampaignDestinations.size;
+      const box = document.getElementById('camp-destinations-box');
+      if (!groups.length) {
+        box.innerHTML = `<div class="p-4 text-center text-slate-400">No synced groups for this account. Click "🔄 Sync Groups" above.</div>`;
+        return;
+      }
+      box.innerHTML = groups.map(g => {
+        const checked = STATE.selectedCampaignDestinations.has(g.id) ? 'checked' : '';
+        const disabled = !g.can_post ? 'disabled' : '';
+        return `
+          <label class="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 ${!g.can_post ? 'opacity-50' : 'cursor-pointer'}">
+            <div class="flex items-center gap-2.5">
+              <input type="checkbox" ${checked} ${disabled} onchange="toggleCampaignDest(${g.id}, this.checked)" class="w-4 h-4 rounded" />
+              <span class="font-semibold text-slate-800">${g.parent_title ? `<span class="text-slate-400">${g.parent_title} › </span>` : ''}${g.title}</span>
+              <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-bold">${g.kind}</span>
+            </div>
+            ${g.can_post
+              ? `<span class="text-[10px] font-bold text-emerald-600">Can post</span>`
+              : `<span class="text-[10px] font-bold text-rose-600">No permission</span>`}
+          </label>
+        `;
+      }).join('');
+    }
+
+    function toggleCampaignDest(id, isChecked) {
+      if (isChecked) STATE.selectedCampaignDestinations.add(id);
+      else STATE.selectedCampaignDestinations.delete(id);
+      document.getElementById('camp-selected-count').innerText = STATE.selectedCampaignDestinations.size;
+    }
+
+    function toggleSelectAllCampaignGroups(selectAll) {
+      const accId = Number(document.getElementById('camp-account').value);
+      const writable = STATE.destinations.filter(d => d.account_id === accId && d.can_post);
+      if (selectAll) writable.forEach(d => STATE.selectedCampaignDestinations.add(d.id));
+      else STATE.selectedCampaignDestinations.clear();
+      renderCampaignDestinationsPicker();
+    }
+
+    async function syncAccountFromCampaignModal() {
+      const accId = Number(document.getElementById('camp-account').value);
+      if (!accId) return alert('Select an account first');
+      await syncAccount(accId);
+      renderCampaignDestinationsPicker();
+    }
+
+    async function submitCampaign() {
+      try {
+        const name = document.getElementById('camp-name').value;
+        const account_id = Number(document.getElementById('camp-account').value);
+        const template_id = Number(document.getElementById('camp-template').value);
+        const destination_ids = Array.from(STATE.selectedCampaignDestinations);
+        if (!name || !account_id || !template_id || !destination_ids.length) {
+          return alert('Please enter a campaign name, account, template, and select at least 1 writable group.');
+        }
+        await api('/api/campaigns', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            account_id,
+            template_id,
+            destination_ids,
+            repeat_count: Number(document.getElementById('camp-repeats').value || 300),
+            round_delay_min_seconds: Number(document.getElementById('camp-delay-min').value || 20),
+            round_delay_max_seconds: Number(document.getElementById('camp-delay-max').value || 45),
+            group_interval_minutes: Number(document.getElementById('camp-round-wait').value || 15),
+            simulate_typing: document.getElementById('camp-typing').checked ? 1 : 0
+          })
+        });
+        closeModal('modal-campaign');
+        switchTab('campaigns');
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function renderCampaigns() {
+      const box = document.getElementById('campaigns-list');
+      if (!STATE.campaigns.length) {
+        box.innerHTML = `<div class="bg-white p-8 rounded-2xl border text-center text-slate-400 text-xs">No campaigns created yet. Click "+ Create Campaign" to start automated group sending!</div>`;
+        return;
+      }
+      box.innerHTML = STATE.campaigns.map(c => `
+        <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2.5">
+                <h4 class="font-extrabold text-base text-slate-900">${c.name}</h4>
+                ${statusBadge(c.status)}
+              </div>
+              <p class="text-xs text-slate-500 mt-0.5">
+                Account: <b>${c.account_name || '#'}</b> · Template: <b>${c.template_name || '#'} (${c.template_mode || 'text'})</b> · Groups: <b>${c.destination_ids.length} selected</b>
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              ${c.status === 'running'
+                ? `<button onclick="setCampaignStatus(${c.id}, 'paused')" class="px-3.5 py-2 rounded-xl bg-amber-500 text-white text-xs font-bold">⏸ Pause</button>`
+                : `<button onclick="setCampaignStatus(${c.id}, 'running')" class="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">▶ Resume / Run</button>`}
+              <button onclick="cloneCampaign(${c.id})" class="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700">📋 Duplicate</button>
+              <button onclick="deleteCampaign(${c.id})" class="px-3 py-2 rounded-xl border border-rose-200 text-xs font-bold text-rose-600">Delete</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-3 bg-slate-50 p-3.5 rounded-xl text-xs">
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Loop Progress</span>
+              <span class="font-extrabold text-slate-900">Round ${c.current_round} / ${c.repeat_count}</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Group Jitter Delay</span>
+              <span class="font-extrabold text-slate-800">${c.round_delay_min_seconds}s – ${c.round_delay_max_seconds}s</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Round Wait</span>
+              <span class="font-extrabold text-slate-800">${Math.round((c.group_interval_seconds || 60) / 60)} mins</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Delivered / Cooldown</span>
+              <span class="font-extrabold text-emerald-600">${c.total_sent} sent</span> <span class="text-rose-500">(${c.total_failed} err)</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[10px] font-bold uppercase">Next Scheduled Run</span>
+              <span class="font-bold text-indigo-700">${c.next_run_at ? new Date(c.next_run_at).toLocaleTimeString() : 'Immediate'}</span>
+            </div>
+          </div>
+          ${c.last_error ? `<div class="text-xs bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-xl font-medium">⚠️ Last Anti-Spam Notice: ${c.last_error}</div>` : ''}
+        </div>
+      `).join('');
+    }
+
+    async function setCampaignStatus(id, status) {
+      await api(`/api/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      refreshAll();
+    }
+
+    async function cloneCampaign(id) {
+      await api(`/api/campaigns/${id}/clone`, { method: 'POST' });
+      refreshAll();
+    }
+
+    async function deleteCampaign(id) {
+      if (!confirm('Delete this campaign?')) return;
+      await api(`/api/campaigns/${id}`, { method: 'DELETE' });
+      refreshAll();
+    }
+
+    // ==================== PROXIES ====================
+    function openProxyModal() { openModal('modal-proxy'); }
+
+    async function submitProxy() {
+      try {
+        await api('/api/proxies', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.getElementById('proxy-name').value || 'Proxy',
+            proxy_type: document.getElementById('proxy-type').value,
+            host: document.getElementById('proxy-host').value,
+            port: Number(document.getElementById('proxy-port').value),
+            username: document.getElementById('proxy-user').value,
+            password: document.getElementById('proxy-pass').value
+          })
+        });
+        closeModal('modal-proxy');
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function renderProxies() {
+      const box = document.getElementById('proxies-list');
+      if (!STATE.proxies.length) {
+        box.innerHTML = `<div class="col-span-3 bg-white p-8 rounded-2xl border text-center text-slate-400 text-xs">No proxies added. Your VPS IP will be used directly unless you add a SOCKS5/HTTP proxy.</div>`;
+        return;
+      }
+      box.innerHTML = STATE.proxies.map(p => `
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 space-y-3">
+          <div class="flex items-center justify-between">
+            <h4 class="font-extrabold text-sm">${p.name}</h4>
+            ${statusBadge(p.status)}
+          </div>
+          <p class="text-xs text-slate-500 font-mono">${p.proxy_type.toUpperCase()}://${p.host}:${p.port}</p>
+          <div class="flex gap-2">
+            <button onclick="testProxy(${p.id})" class="px-3 py-1.5 rounded-lg bg-slate-100 text-xs font-bold">Test Ping</button>
+            <button onclick="deleteProxy(${p.id})" class="px-3 py-1.5 rounded-lg text-rose-600 text-xs font-bold ml-auto">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function testProxy(id) {
+      await api(`/api/proxies/${id}/test`, { method: 'POST' });
+      refreshAll();
+    }
+
+    async function deleteProxy(id) {
+      await api(`/api/proxies/${id}`, { method: 'DELETE' });
+      refreshAll();
+    }
+
+    // ==================== LOGS ====================
+    async function loadLogs() {
+      const logs = await api('/api/activity');
+      const tbody = document.getElementById('full-logs-body');
+      tbody.innerHTML = logs.length ? logs.map(l => `
+        <tr class="hover:bg-slate-50">
+          <td class="p-3 text-slate-500">${new Date(l.created_at).toLocaleString()}</td>
+          <td class="p-3 font-bold">${l.campaign_name || '-'}</td>
+          <td class="p-3">${l.account_name || '-'}</td>
+          <td class="p-3 font-bold text-slate-800">${l.destination_title || '-'}</td>
+          <td class="p-3">#${l.round_number || 1}</td>
+          <td class="p-3">${statusBadge(l.status)}</td>
+          <td class="p-3 text-slate-600">${l.reason || ''}</td>
+        </tr>
+      `).join('') : `<tr><td colspan="7" class="p-6 text-center text-slate-400">No logs yet.</td></tr>`;
+    }
+
+    // Auto-refresh every 5 seconds
+    refreshAll();
+    setInterval(() => {
+      refreshAll();
+      if (!document.getElementById('view-logs').classList.contains('hidden')) loadLogs();
+    }, 5000);
+  </script>
+</body>
+</html>
