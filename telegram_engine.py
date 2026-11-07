@@ -1111,7 +1111,53 @@ async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
         custom_emoji_count = sum(1 for e in entities if isinstance(e, types.MessageEntityCustomEmoji))
         is_pinned = bool(getattr(m, "pinned", False))
 
-        display_text = msg_text.strip()
+        # Extract inline keyboard buttons if present (e.g. shop product rows / 'More Products' buttons)
+        button_rows = []
+        reply_markup = getattr(m, "reply_markup", None)
+        if reply_markup and getattr(reply_markup, "rows", None):
+            for row in reply_markup.rows:
+                row_btns = []
+                for btn in getattr(row, "buttons", []) or []:
+                    b_txt = (getattr(btn, "text", None) or "").strip()
+                    if b_txt:
+                        row_btns.append(b_txt)
+                if row_btns:
+                    button_rows.append("  |  ".join(row_btns))
+
+        # Extract extra text from webpage / poll / invoice / game media if present
+        media_extra_lines = []
+        if isinstance(media, types.MessageMediaWebPage):
+            wp = getattr(media, "webpage", None)
+            if wp:
+                wp_title = (getattr(wp, "title", None) or getattr(wp, "site_name", None) or "").strip()
+                wp_desc = (getattr(wp, "description", None) or "").strip()
+                if wp_title:
+                    media_extra_lines.append(wp_title)
+                if wp_desc:
+                    media_extra_lines.append(wp_desc)
+        elif media is not None:
+            for attr_name in ("title", "description"):
+                val = (getattr(media, attr_name, None) or "").strip()
+                if val:
+                    media_extra_lines.append(val)
+            poll_obj = getattr(media, "poll", None)
+            if poll_obj:
+                q_obj = getattr(poll_obj, "question", None)
+                q_txt = getattr(q_obj, "text", None) if hasattr(q_obj, "text") else str(q_obj or "")
+                if q_txt.strip():
+                    media_extra_lines.append(f"📊 Poll: {q_txt.strip()}")
+
+        parts = []
+        if msg_text.strip():
+            parts.append(msg_text.strip())
+        elif msg_text and custom_emoji_count > 0:
+            parts.append(f"✨ ({custom_emoji_count} Premium Custom Emojis) {msg_text}")
+        if media_extra_lines:
+            parts.extend(media_extra_lines)
+        if button_rows:
+            parts.append("\n".join(f"🔘 {r}" for r in button_rows))
+
+        display_text = "\n\n".join(parts).strip()
         if not display_text:
             if forwarded_from:
                 display_text = f"[Forwarded from {forwarded_from}] ({media_type.upper()})"
@@ -1122,7 +1168,8 @@ async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
         results.append(
             {
                 "id": m.id,
-                "text": display_text[:600],
+                "text": display_text[:4000],
+                "buttons": button_rows,
                 "media_type": media_type,
                 "is_forwarded": is_forwarded,
                 "forwarded_from": forwarded_from,

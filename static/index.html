@@ -430,52 +430,79 @@
 
   <!-- CREATE TEMPLATE MODAL -->
   <div id="modal-template" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
-    <div class="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-xl">
-      <div class="flex items-center justify-between border-b pb-3">
-        <h3 id="modal-template-title" class="font-extrabold text-base">Create Message Template</h3>
-        <button onclick="closeModal('modal-template')" class="text-slate-400 hover:text-slate-700 font-bold">✕</button>
+    <div class="bg-white rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl max-h-[92vh] flex flex-col">
+      <div class="flex items-center justify-between border-b pb-3 shrink-0">
+        <h3 id="modal-template-title" class="font-extrabold text-base text-slate-900">Create Message Template</h3>
+        <button onclick="closeModal('modal-template')" class="text-slate-400 hover:text-slate-700 font-bold text-sm">✕</button>
       </div>
-      <div class="space-y-3 text-xs">
+      <div class="space-y-3.5 text-xs overflow-y-auto pr-1 flex-1">
         <div>
-          <label class="block font-bold mb-1">Template Name</label>
-          <input id="tmpl-name" type="text" placeholder="e.g. Main Promo Post" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold" />
+          <label class="block font-bold text-slate-700 mb-1">Template Name</label>
+          <input id="tmpl-name" type="text" placeholder="e.g. Main Promo Post" class="w-full h-10 px-3.5 rounded-xl border border-slate-200 font-semibold focus:border-[#1a2b88] outline-none" />
         </div>
         <div>
-          <label class="block font-bold mb-1">Sending Mode (Anti-Spam Strategy)</label>
-          <select id="tmpl-mode" onchange="toggleTemplateMode()" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold">
-            <option value="forward">Forward from Saved Messages (Preserves Premium Emojis & Media + Auto Clean-Copy)</option>
-            <option value="text">Custom Text / HTML with Spintax {Hi|Hello|Hey}</option>
-          </select>
+          <label class="block font-bold text-slate-700 mb-1.5">Sending Mode (Anti-Spam Strategy)</label>
+          <input type="hidden" id="tmpl-mode" value="forward" />
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <button type="button" id="mode-card-forward" onclick="setTemplateMode('forward')" class="text-left p-3 rounded-xl border-2 border-[#1a2b88] bg-blue-50/60 transition flex flex-col justify-between gap-1">
+              <div class="flex items-center justify-between w-full">
+                <span class="font-extrabold text-slate-900 text-xs">Saved Messages Forward</span>
+                <span id="mode-badge-forward" class="px-2 py-0.5 rounded-full bg-[#1a2b88] text-white text-[10px] font-bold">✓ Active</span>
+              </div>
+              <span class="text-[11px] text-slate-600 leading-snug">Preserves Premium Emojis & Media + Auto Clean-Copy</span>
+            </button>
+            <button type="button" id="mode-card-text" onclick="setTemplateMode('text')" class="text-left p-3 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition flex flex-col justify-between gap-1">
+              <div class="flex items-center justify-between w-full">
+                <span class="font-extrabold text-slate-900 text-xs">Custom Text / Spintax</span>
+                <span id="mode-badge-text" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold">Select</span>
+              </div>
+              <span class="text-[11px] text-slate-600 leading-snug">Direct HTML & Spintax <code>{Hi|Hello|Hey}</code></span>
+            </button>
+          </div>
         </div>
 
         <!-- Forward Mode Fields -->
         <div id="tmpl-forward-box" class="space-y-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
           <div>
-            <label class="block font-bold mb-1">Select Source Telegram Account</label>
+            <label class="block font-bold text-slate-700 mb-1">Select Source Telegram Account</label>
             <div class="flex gap-2">
               <select id="tmpl-src-acc" onchange="loadSavedMessagesForTemplate()" class="flex-1 h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold"></select>
-              <button type="button" onclick="loadSavedMessagesForTemplate()" class="px-3 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white font-bold">Refresh Saved Messages</button>
+              <button type="button" onclick="loadSavedMessagesForTemplate()" class="px-3.5 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white font-bold shrink-0">Refresh Saved Messages</button>
             </div>
           </div>
           <div>
-            <label class="block font-bold mb-1">Pick Message from 'Saved Messages' (All Forwarded & Direct Posts)</label>
-            <select id="tmpl-src-msg" onchange="highlightSelectedSavedCard(this.value)" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold mb-2">
-              <option value="">Loading Saved Messages...</option>
-            </select>
-            <div id="tmpl-saved-cards" class="max-h-52 overflow-y-auto space-y-2 pr-1"></div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="block font-bold text-slate-700">Click Any Message Below to Select</label>
+              <span id="tmpl-selected-indicator" class="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">None Selected</span>
+            </div>
+            <input type="hidden" id="tmpl-src-msg" value="" />
+            <div id="tmpl-saved-cards" class="max-h-60 overflow-y-auto space-y-2 pr-1"></div>
+
+            <!-- In-Box Full Message Viewer -->
+            <div id="tmpl-view-box" class="hidden mt-3 p-3.5 rounded-xl bg-white border-2 border-[#1a2b88] shadow-sm space-y-2">
+              <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                <div class="flex items-center gap-2">
+                  <span class="px-2 py-0.5 rounded bg-[#1a2b88] text-white text-[10px] font-bold">Full Message Preview</span>
+                  <span id="tmpl-view-title" class="font-extrabold text-slate-900 text-xs"></span>
+                </div>
+                <button type="button" onclick="closeSavedMsgViewer()" class="text-slate-400 hover:text-slate-700 font-bold text-xs px-1.5">Close ✕</button>
+              </div>
+              <div id="tmpl-view-meta" class="flex flex-wrap gap-1.5"></div>
+              <div id="tmpl-view-body" class="text-xs text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-200 whitespace-pre-wrap max-h-44 overflow-y-auto font-medium leading-relaxed"></div>
+            </div>
           </div>
         </div>
 
         <!-- Text Mode Fields -->
         <div id="tmpl-text-box" class="hidden space-y-2">
-          <label class="block font-bold">Message Content (HTML & Spintax Supported)</label>
+          <label class="block font-bold text-slate-700">Message Content (HTML & Spintax Supported)</label>
           <textarea id="tmpl-content" rows="5" placeholder="{Hello|Hi|Hey} everyone! Check out our new offer...&#10;&#10;Use {{time}} or {{rand}} to make every message unique!" class="w-full p-3 rounded-xl border border-slate-200 font-medium"></textarea>
           <p class="text-[11px] text-emerald-700 bg-emerald-50 p-2.5 rounded-lg border border-emerald-200">
             <b>Anti-Spam Tip:</b> Use Spintax like <code>{Special|Exclusive} Offer</code> so Telegram never sees identical message hashes.
           </p>
         </div>
       </div>
-      <div class="flex justify-end gap-2 pt-2">
+      <div class="flex justify-end gap-2 pt-2 border-t border-slate-100 shrink-0">
         <button onclick="closeModal('modal-template')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancel</button>
         <button id="modal-template-save-btn" onclick="submitTemplate()" class="px-4 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">Save Template</button>
       </div>
@@ -1321,6 +1348,8 @@
     }
 
     // ==================== TEMPLATES ====================
+    STATE.loadedSavedMessages = [];
+
     function openTemplateModal() {
       STATE.editingTemplateId = null;
       const titleEl = document.getElementById('modal-template-title');
@@ -1331,6 +1360,7 @@
       document.getElementById('tmpl-name').value = '';
       document.getElementById('tmpl-mode').value = 'forward';
       document.getElementById('tmpl-content').value = '';
+      closeSavedMsgViewer();
 
       const sel = document.getElementById('tmpl-src-acc');
       const connected = STATE.accounts.filter(a => a.status === 'connected');
@@ -1357,6 +1387,7 @@
       document.getElementById('tmpl-name').value = t.name || '';
       document.getElementById('tmpl-mode').value = t.mode || 'forward';
       document.getElementById('tmpl-content').value = t.content || '';
+      closeSavedMsgViewer();
 
       const sel = document.getElementById('tmpl-src-acc');
       const connected = STATE.accounts.filter(a => a.status === 'connected');
@@ -1375,10 +1406,34 @@
       }
     }
 
+    function setTemplateMode(mode) {
+      document.getElementById('tmpl-mode').value = mode;
+      toggleTemplateMode();
+    }
+
     function toggleTemplateMode() {
-      const mode = document.getElementById('tmpl-mode').value;
+      const mode = document.getElementById('tmpl-mode').value || 'forward';
       document.getElementById('tmpl-forward-box').classList.toggle('hidden', mode !== 'forward');
       document.getElementById('tmpl-text-box').classList.toggle('hidden', mode !== 'text');
+
+      const fwdCard = document.getElementById('mode-card-forward');
+      const txtCard = document.getElementById('mode-card-text');
+      const fwdBadge = document.getElementById('mode-badge-forward');
+      const txtBadge = document.getElementById('mode-badge-text');
+
+      if (fwdCard && txtCard) {
+        if (mode === 'forward') {
+          fwdCard.className = 'text-left p-3 rounded-xl border-2 border-[#1a2b88] bg-blue-50/60 transition flex flex-col justify-between gap-1';
+          txtCard.className = 'text-left p-3 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition flex flex-col justify-between gap-1';
+          if (fwdBadge) { fwdBadge.className = 'px-2 py-0.5 rounded-full bg-[#1a2b88] text-white text-[10px] font-bold'; fwdBadge.innerText = '✓ Active'; }
+          if (txtBadge) { txtBadge.className = 'px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold'; txtBadge.innerText = 'Select'; }
+        } else {
+          txtCard.className = 'text-left p-3 rounded-xl border-2 border-[#1a2b88] bg-blue-50/60 transition flex flex-col justify-between gap-1';
+          fwdCard.className = 'text-left p-3 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition flex flex-col justify-between gap-1';
+          if (txtBadge) { txtBadge.className = 'px-2 py-0.5 rounded-full bg-[#1a2b88] text-white text-[10px] font-bold'; txtBadge.innerText = '✓ Active'; }
+          if (fwdBadge) { fwdBadge.className = 'px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold'; fwdBadge.innerText = 'Select'; }
+        }
+      }
     }
 
     function selectSavedMessageCard(msgId) {
@@ -1388,13 +1443,66 @@
     }
 
     function highlightSelectedSavedCard(msgId) {
+      const ind = document.getElementById('tmpl-selected-indicator');
+      if (ind) {
+        ind.innerText = msgId ? `✓ Selected: Msg #${msgId}` : 'None Selected';
+      }
       document.querySelectorAll('.saved-msg-card').forEach(el => {
-        if (el.getAttribute('data-id') === String(msgId)) {
+        const isSel = el.getAttribute('data-id') === String(msgId);
+        const btn = el.querySelector('.saved-select-badge');
+        if (isSel) {
           el.classList.add('border-[#1a2b88]', 'bg-blue-50/50', 'ring-2', 'ring-[#1a2b88]/20');
+          if (btn) {
+            btn.className = 'saved-select-badge px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[10px] font-extrabold shadow-sm';
+            btn.innerText = '✓ Selected';
+          }
         } else {
           el.classList.remove('border-[#1a2b88]', 'bg-blue-50/50', 'ring-2', 'ring-[#1a2b88]/20');
+          if (btn) {
+            btn.className = 'saved-select-badge px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold';
+            btn.innerText = 'Select';
+          }
         }
       });
+    }
+
+    function viewSavedMessageInBox(msgId, ev) {
+      if (ev) ev.stopPropagation();
+      const m = (STATE.loadedSavedMessages || []).find(item => Number(item.id) === Number(msgId));
+      if (!m) return;
+
+      // Also expand inline inside the card and open the in-box full preview panel
+      const cardText = document.getElementById(`saved-card-text-${m.id}`);
+      if (cardText) {
+        cardText.classList.toggle('line-clamp-2');
+      }
+
+      const viewBox = document.getElementById('tmpl-view-box');
+      const viewTitle = document.getElementById('tmpl-view-title');
+      const viewMeta = document.getElementById('tmpl-view-meta');
+      const viewBody = document.getElementById('tmpl-view-body');
+      if (!viewBox || !viewBody) return;
+
+      viewTitle.innerText = `Saved Message #${m.id}`;
+      const badges = [];
+      if (m.is_forwarded) {
+        badges.push(`<span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[10px] font-bold">Forwarded${m.forwarded_from ? ' · ' + m.forwarded_from : ''}</span>`);
+      } else {
+        badges.push(`<span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-bold">Direct Saved</span>`);
+      }
+      if (m.custom_emoji_count) {
+        badges.push(`<span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">${m.custom_emoji_count} Premium Emojis</span>`);
+      }
+      badges.push(`<span class="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase">${m.media_type || 'TEXT'}</span>`);
+      viewMeta.innerHTML = badges.join('');
+      viewBody.textContent = m.text || '';
+      viewBox.classList.remove('hidden');
+      viewBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function closeSavedMsgViewer() {
+      const viewBox = document.getElementById('tmpl-view-box');
+      if (viewBox) viewBox.classList.add('hidden');
     }
 
     async function loadSavedMessagesForTemplate(preselectMsgId = null) {
@@ -1402,21 +1510,17 @@
       if (!accId) return;
       const sel = document.getElementById('tmpl-src-msg');
       const cardsBox = document.getElementById('tmpl-saved-cards');
-      sel.innerHTML = `<option value="">Loading Saved Messages from Telegram...</option>`;
-      if (cardsBox) cardsBox.innerHTML = `<div class="p-3 text-center text-slate-400">Fetching all forwarded & direct messages from Saved Messages...</div>`;
+      closeSavedMsgViewer();
+      if (cardsBox) cardsBox.innerHTML = `<div class="p-4 text-center text-slate-400 font-semibold">Fetching all forwarded & direct messages from Saved Messages...</div>`;
       try {
         const msgs = await api(`/api/telegram/accounts/${accId}/saved-messages?t=${Date.now()}`);
+        STATE.loadedSavedMessages = msgs || [];
         if (!msgs.length) {
-          sel.innerHTML = `<option value="">No messages found in your 'Saved Messages' chat!</option>`;
-          if (cardsBox) cardsBox.innerHTML = `<div class="p-3 text-center text-rose-500">No messages found in Saved Messages. Forward or send a message to Saved Messages in Telegram and click Refresh.</div>`;
+          sel.value = '';
+          highlightSelectedSavedCard('');
+          if (cardsBox) cardsBox.innerHTML = `<div class="p-4 text-center text-rose-500 font-semibold">No messages found in Saved Messages. Forward or send a message to Saved Messages in Telegram and click Refresh.</div>`;
           return;
         }
-        sel.innerHTML = msgs.map(m => {
-          const fwdLabel = m.is_forwarded ? `[FWD${m.forwarded_from ? ': ' + m.forwarded_from : ''}] ` : '';
-          const emojiLabel = m.custom_emoji_count ? `[${m.custom_emoji_count} Premium Emojis] ` : '';
-          const cleanPreview = (m.text || '').replace(/\s+/g, ' ').slice(0, 75);
-          return `<option value="${m.id}" data-text="${encodeURIComponent(m.text)}">[#${m.id}] ${fwdLabel}${emojiLabel}${cleanPreview}</option>`;
-        }).join('');
 
         const activeId = preselectMsgId && msgs.some(m => Number(m.id) === Number(preselectMsgId))
           ? Number(preselectMsgId)
@@ -1424,9 +1528,12 @@
         sel.value = String(activeId);
 
         if (cardsBox) {
-          cardsBox.innerHTML = msgs.map((m) => `
-            <div onclick="selectSavedMessageCard(${m.id})" data-id="${m.id}" class="saved-msg-card cursor-pointer p-2.5 rounded-xl border border-slate-200 bg-white hover:border-[#1a2b88] transition ${Number(m.id) === Number(activeId) ? 'border-[#1a2b88] bg-blue-50/50 ring-2 ring-[#1a2b88]/20' : ''}">
-              <div class="flex items-center justify-between gap-1.5 flex-wrap mb-1">
+          cardsBox.innerHTML = msgs.map((m) => {
+            const isSel = Number(m.id) === Number(activeId);
+            const safeText = (m.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `
+            <div onclick="selectSavedMessageCard(${m.id})" data-id="${m.id}" class="saved-msg-card cursor-pointer p-3 rounded-xl border border-slate-200 bg-white hover:border-[#1a2b88] transition space-y-2 ${isSel ? 'border-[#1a2b88] bg-blue-50/50 ring-2 ring-[#1a2b88]/20' : ''}">
+              <div class="flex items-center justify-between gap-1.5 flex-wrap">
                 <div class="flex items-center gap-1.5 flex-wrap">
                   <span class="font-extrabold text-[11px] text-slate-900">#${m.id}</span>
                   ${m.is_forwarded
@@ -1440,12 +1547,23 @@
                     : ''}
                   <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase">${m.media_type}</span>
                 </div>
-                <span class="text-[10px] text-slate-400">${m.date ? new Date(m.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</span>
+                <span class="text-[10px] text-slate-400 font-semibold">${m.date ? new Date(m.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</span>
               </div>
-              <div class="text-[11px] text-slate-700 whitespace-pre-wrap line-clamp-3 font-medium">${(m.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+
+              <div id="saved-card-text-${m.id}" class="text-[11px] text-slate-700 bg-slate-50/80 p-2.5 rounded-lg border border-slate-100 whitespace-pre-wrap line-clamp-2 font-medium">${safeText}</div>
+
+              <div class="flex items-center justify-between pt-0.5">
+                <button type="button" onclick="viewSavedMessageInBox(${m.id}, event)" class="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-[#1a2b88] text-[10px] font-extrabold transition">
+                  👁 View Full Message
+                </button>
+                <button type="button" onclick="event.stopPropagation(); selectSavedMessageCard(${m.id})" class="saved-select-badge ${isSel ? 'px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[10px] font-extrabold shadow-sm' : 'px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold'}">
+                  ${isSel ? '✓ Selected' : 'Select'}
+                </button>
+              </div>
             </div>
-          `).join('');
+          `}).join('');
         }
+        highlightSelectedSavedCard(activeId);
       } catch (e) {
         showNotice(e.message, 'error');
       }
@@ -1460,11 +1578,10 @@
 
         if (mode === 'forward') {
           srcAcc = Number(document.getElementById('tmpl-src-acc').value);
-          const msgSel = document.getElementById('tmpl-src-msg');
-          srcMsg = Number(msgSel.value);
+          srcMsg = Number(document.getElementById('tmpl-src-msg').value);
           if (!srcAcc || !srcMsg) return showNotice('Please load and select a message from Saved Messages.', 'error', 'Select Saved Message');
-          const opt = msgSel.options[msgSel.selectedIndex];
-          content = opt ? decodeURIComponent(opt.getAttribute('data-text') || 'Forwarded Saved Message') : content;
+          const picked = (STATE.loadedSavedMessages || []).find(item => Number(item.id) === Number(srcMsg));
+          content = picked ? picked.text : (content || 'Forwarded Saved Message');
         }
 
         const isEditing = Boolean(STATE.editingTemplateId);
@@ -1490,6 +1607,22 @@
       }
     }
 
+    function toggleTemplateFullView(id) {
+      const box = document.getElementById(`tmpl-card-content-${id}`);
+      const btn = document.getElementById(`tmpl-card-viewbtn-${id}`);
+      if (!box) return;
+      const isClamped = box.classList.contains('line-clamp-3');
+      if (isClamped) {
+        box.classList.remove('line-clamp-3');
+        box.classList.add('max-h-72', 'overflow-y-auto', 'border-[#1a2b88]', 'bg-blue-50/30');
+        if (btn) btn.innerText = 'Hide Message';
+      } else {
+        box.classList.add('line-clamp-3');
+        box.classList.remove('max-h-72', 'overflow-y-auto', 'border-[#1a2b88]', 'bg-blue-50/30');
+        if (btn) btn.innerText = 'View Message';
+      }
+    }
+
     function renderTemplates() {
       const box = document.getElementById('templates-list');
       if (!STATE.templates.length) {
@@ -1499,17 +1632,18 @@
       box.innerHTML = STATE.templates.map(t => `
         <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between space-y-3">
           <div class="space-y-2">
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
               <h4 class="font-extrabold text-sm text-slate-900">${t.name}</h4>
               <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold ${t.mode === 'forward' ? 'badge-blue' : 'badge-green'}">
                 ${t.mode === 'forward' ? `Saved Msg #${t.source_message_id} (Forward / Clean Copy)` : 'Spintax / Text'}
               </span>
             </div>
-            <p class="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl whitespace-pre-wrap line-clamp-3">${t.content || ''}</p>
+            <div id="tmpl-card-content-${t.id}" class="text-xs text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-xl whitespace-pre-wrap line-clamp-3 transition">${(t.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
           </div>
-          <div class="flex items-center justify-between pt-2 text-xs text-slate-400">
+          <div class="flex items-center justify-between pt-2 text-xs text-slate-400 flex-wrap gap-2">
             <span>${t.source_account_name ? `Source: ${t.source_account_name}` : 'All Accounts Compatible'}</span>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
+              <button id="tmpl-card-viewbtn-${t.id}" onclick="toggleTemplateFullView(${t.id})" class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-bold hover:bg-slate-200 transition">View Message</button>
               <button onclick="openEditTemplateModal(${t.id})" class="px-2.5 py-1 rounded-lg bg-indigo-50 text-[#1a2b88] font-bold hover:bg-indigo-100 transition">Edit</button>
               <button onclick="deleteTemplate(${t.id})" class="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-600 font-bold hover:bg-rose-100 transition">Delete</button>
             </div>
