@@ -227,7 +227,7 @@
             <span id="cat-count-24h_once" class="text-xl font-extrabold text-amber-700">0</span>
           </button>
           <button onclick="setGroupCategoryFilter('text_only')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-purple-600 transition">
-            <span class="text-[10px] font-bold text-purple-600 uppercase block">Text Only / No Media</span>
+            <span class="text-[10px] font-bold text-purple-600 uppercase block">No Emoji / Text Only</span>
             <span id="cat-count-text_only" class="text-xl font-extrabold text-purple-700">0</span>
           </button>
           <button onclick="setGroupCategoryFilter('restricted')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-rose-600 transition">
@@ -247,7 +247,7 @@
               <option value="24h_once">24-Hour Limit (Max 1 Post / 24h)</option>
               <option value="slowmode">Slowmode Active Groups</option>
               <option value="no_links">No Links Allowed</option>
-              <option value="text_only">Text Only (No Media / Custom Emojis)</option>
+              <option value="text_only">No Premium Emoji / Text Only</option>
               <option value="restricted">Restricted (Cannot Post)</option>
             </select>
           </div>
@@ -499,6 +499,7 @@
               <button type="button" onclick="selectCampaignCategory('all_writable')" class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px]">All Writable</button>
               <button type="button" onclick="selectCampaignCategory('standard')" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 text-[11px]">Only Standard</button>
               <button type="button" onclick="selectCampaignCategory('no_forward')" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-indigo-700 text-[11px]">Only No-Forward</button>
+              <button type="button" onclick="selectCampaignCategory('text_only')" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-purple-700 text-[11px]">Only No-Emoji</button>
               <button type="button" onclick="selectCampaignCategory('24h_once')" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-amber-700 text-[11px]">Only 24h Groups</button>
               <button type="button" onclick="selectCampaignCategory('none')" class="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-700 font-bold text-[11px]">Clear</button>
             </div>
@@ -616,10 +617,11 @@
       forward_ok: { label: 'Forward OK', cls: 'badge-green' },
       premium_emoji_ok: { label: 'Premium Emoji OK', cls: 'badge-blue' },
       no_forward: { label: 'No Forward (Clean Copy)', cls: 'badge-purple' },
+      no_emoji: { label: 'No Premium Emoji', cls: 'badge-red' },
       '24h_once': { label: '1 Post / 24h', cls: 'badge-amber' },
       slowmode: { label: 'Slowmode', cls: 'badge-amber' },
       no_links: { label: 'No Links', cls: 'badge-red' },
-      text_only: { label: 'Text Only', cls: 'badge-slate' },
+      text_only: { label: 'No Emoji / Text Only', cls: 'badge-purple' },
       restricted: { label: 'Restricted', cls: 'badge-red' }
     };
 
@@ -983,7 +985,7 @@
         const cat = d.category || (d.can_post ? 'standard' : 'restricted');
         const tags = d.auto_tags || [];
         if (catFilter !== 'all' && cat !== catFilter && !tags.includes(catFilter)) return false;
-        const searchStr = `${d.parent_title || ''} ${d.title} ${d.username || ''} ${d.rules_summary || ''}`.toLowerCase();
+        const searchStr = `${d.parent_title || ''} ${d.title} ${d.username || ''} ${d.folder_name || ''} ${d.rules_summary || ''}`.toLowerCase();
         return !q || searchStr.includes(q);
       });
 
@@ -994,9 +996,10 @@
         return `
         <tr class="hover:bg-slate-50">
           <td class="p-3">
-            <div class="font-bold text-slate-900">
-              ${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}
-              ${d.username ? `<span class="text-slate-400 font-normal ml-1">@${d.username}</span>` : ''}
+            <div class="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+              <span>${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}</span>
+              ${d.username ? `<span class="text-slate-400 font-normal">@${d.username}</span>` : ''}
+              ${d.folder_name ? `<span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">Folder: ${d.folder_name}</span>` : ''}
             </div>
             <div class="text-[10px] text-slate-400 uppercase font-semibold mt-0.5">${d.kind} · Account: ${d.account_name || '-'}</div>
           </td>
@@ -1009,10 +1012,10 @@
             <select onchange="changeGroupCategory(${d.id}, this.value)" class="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-800 outline-none focus:border-[#1a2b88]">
               <option value="standard" ${currentCat === 'standard' ? 'selected' : ''}>Standard (Forward OK)</option>
               <option value="no_forward" ${currentCat === 'no_forward' ? 'selected' : ''}>No-Forward (Clean Copy)</option>
+              <option value="text_only" ${currentCat === 'text_only' ? 'selected' : ''}>No Emoji / Text Only</option>
               <option value="24h_once" ${currentCat === '24h_once' ? 'selected' : ''}>24h Limit (1 Post/Day)</option>
               <option value="slowmode" ${currentCat === 'slowmode' ? 'selected' : ''}>Slowmode Group</option>
               <option value="no_links" ${currentCat === 'no_links' ? 'selected' : ''}>No Links Allowed</option>
-              <option value="text_only" ${currentCat === 'text_only' ? 'selected' : ''}>Text Only (No Media)</option>
               <option value="restricted" ${currentCat === 'restricted' ? 'selected' : ''}>Restricted (Skip)</option>
             </select>
           </td>

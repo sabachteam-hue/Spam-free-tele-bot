@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 
 import qrcode
-from telethon import TelegramClient, functions, types
+from telethon import TelegramClient, functions, types, utils
 from telethon.sessions import StringSession
 from telethon.errors import (
     SessionPasswordNeededError,
@@ -247,10 +247,48 @@ async def finalize_login(account_id: int, client: TelegramClient) -> dict:
     }
 
 
-def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
+async def fetch_telegram_folder_map(client: TelegramClient) -> Dict[int, List[str]]:
     """
-    Analyzes a Telegram group/channel entity + optional description/pinned rules text
-    and returns detected permissions, auto_tags, and primary category.
+    Fetches user's custom Telegram Chat Folders (Dialog Filters) via MTProto
+    and maps every peer ID (both -100... dialog ID and raw entity ID) to its folder titles.
+    """
+    folder_map: Dict[int, List[str]] = {}
+    try:
+        res = await client(functions.messages.GetDialogFiltersRequest())
+        filters = getattr(res, "filters", res) or []
+        for f in filters:
+            raw_title = getattr(f, "title", None)
+            if not raw_title:
+                continue
+            title_str = getattr(raw_title, "text", None) if hasattr(raw_title, "text") else str(raw_title)
+            title_str = (title_str or "").strip()
+            if not title_str:
+                continue
+
+            peers = list(getattr(f, "include_peers", []) or []) + list(getattr(f, "pinned_peers", []) or [])
+            for p in peers:
+                try:
+                    pid = utils.get_peer_id(p)
+                    folder_map.setdefault(pid, [])
+                    if title_str not in folder_map[pid]:
+                        folder_map[pid].append(title_str)
+                except Exception:
+                    pass
+                for attr in ("channel_id", "chat_id", "user_id"):
+                    raw_id = getattr(p, attr, None)
+                    if raw_id:
+                        folder_map.setdefault(int(raw_id), [])
+                        if title_str not in folder_map[int(raw_id)]:
+                            folder_map[int(raw_id)].append(title_str)
+    except Exception as e:
+        print("Warning: Could not fetch Telegram dialog folders:", e)
+    return folder_map
+
+
+def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional[List[str]] = None) -> dict:
+    """
+    Analyzes a Telegram group/channel entity + Telegram Chat Folders + description/pinned rules text
+    and returns detected permissions, auto_tags, folder_name, and primary category.
     """
     can_post = 1
     restriction_until = None
@@ -260,6 +298,7 @@ def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
     slowmode_seconds = getattr(entity, "slowmode_seconds", 0) or 0
     tags: List[str] = []
     reasons: List[str] = []
+    folder_names = folder_names or []
 
     if getattr(entity, "broadcast", False) and not getattr(entity, "creator", False):
         admin_rights = getattr(entity, "admin_rights", None)
@@ -286,17 +325,42 @@ def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
     if getattr(entity, "noforwards", False):
         allow_forwards = 0
 
-    # Parse rule text (English + Vietnamese + Urdu/Hindi transliteration keywords)
+    is_24h = False
+    is_no_emoji = False
+
+    # 1. Check User's Telegram Chat Folders first (highest priority user classification!)
+    for fn in folder_names:
+        fn_low = fn.lower()
+        if any(k in fn_low for k in ["emji", "emoji", "withut", "without", "text only", "no media"]):
+            is_no_emoji = True
+            tags.append("text_only")
+            tags.append("no_emoji")
+            reasons.append(f"Telegram Folder: {fn} (No Premium Emojis)")
+        if any(k in fn_low for k in ["forwrd", "forward", "dnt", "dont", "don't", "no fwd", "clean"]):
+            allow_forwards = 0
+            tags.append("no_forward")
+            reasons.append(f"Telegram Folder: {fn} (No Forwarding -> Auto Clean Copy)")
+        if any(k in fn_low for k in ["24h", "24 hour", "1 post", "daily", "once"]):
+            is_24h = True
+            tags.append("24h_once")
+            reasons.append(f"Telegram Folder: {fn} (1 Post / 24h)")
+        if any(k in fn_low for k in ["no link", "nolink"]):
+            allow_links = 0
+            tags.append("no_links")
+            reasons.append(f"Telegram Folder: {fn} (No Links)")
+
+    # 2. Parse rule text (English + Vietnamese + Urdu/Hindi transliteration keywords)
     txt = (rule_text or "").lower()
     if any(k in txt for k in ["no forward", "don't forward", "do not forward", "forwarding not allowed", "cấm forward", "không forward"]):
         allow_forwards = 0
-        reasons.append("Rule: No Forwarding")
+        if not any("No Forwarding" in r for r in reasons):
+            reasons.append("Rule: No Forwarding")
 
     if any(k in txt for k in ["no link", "links not allowed", "don't send link", "cấm link", "không chèn link", "no url"]):
         allow_links = 0
-        reasons.append("Rule: No Links")
+        if not any("No Links" in r for r in reasons):
+            reasons.append("Rule: No Links")
 
-    is_24h = False
     if slowmode_seconds >= 3600 or any(
         k in txt
         for k in [
@@ -313,12 +377,16 @@ def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
         ]
     ):
         is_24h = True
-        reasons.append("Rule: 1 Post / 24h")
+        if not any("24h" in r for r in reasons):
+            reasons.append("Rule: 1 Post / 24h")
 
-    if any(k in txt for k in ["no emoji", "no custom emoji", "no sticker", "no media", "text only"]):
+    if any(k in txt for k in ["no emoji", "no custom emoji", "without emoji", "withut emji", "no sticker", "no media", "text only", "cấm emoji"]):
+        is_no_emoji = True
         tags.append("text_only")
-        reasons.append("Rule: Text Only / No Custom Emoji")
-    elif allow_media:
+        tags.append("no_emoji")
+        if not any("No Premium Emoji" in r for r in reasons):
+            reasons.append("Rule: No Premium Emoji / Text Only")
+    elif allow_media and not is_no_emoji:
         tags.append("premium_emoji_ok")
 
     if not can_post:
@@ -337,10 +405,10 @@ def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
         if not allow_links:
             tags.append("no_links")
 
-        if not allow_media:
+        if not allow_media or is_no_emoji:
             tags.append("text_only")
 
-        if not tags or tags == ["premium_emoji_ok", "forward_ok"]:
+        if not tags or set(tags).issubset({"premium_emoji_ok", "forward_ok"}):
             tags.append("standard")
 
     # Determine primary distribution category
@@ -350,7 +418,7 @@ def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
         category = "24h_once"
     elif not allow_forwards:
         category = "no_forward"
-    elif not allow_media or "text_only" in tags:
+    elif is_no_emoji or not allow_media or "text_only" in tags:
         category = "text_only"
     elif not allow_links:
         category = "no_links"
@@ -361,12 +429,19 @@ def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
 
     if slowmode_seconds > 0:
         reasons.append(f"Slowmode: {slowmode_seconds}s")
-    if not allow_links and "Rule: No Links" not in reasons:
+    if not allow_links and not any("Links" in r for r in reasons):
         reasons.append("Telegram Permission: Links Disabled")
     if not allow_media:
         reasons.append("Telegram Permission: Media Disabled")
-    if not allow_forwards and "Rule: No Forwarding" not in reasons:
+    if not allow_forwards and not any("Forward" in r for r in reasons):
         reasons.append("Group Protection: Forwarding Restricted")
+
+    # Pick display folder badge (prefer specific custom folders over generic "Groups")
+    specific_folders = [f for f in folder_names if f.lower() not in ("groups", "channels", "all", "bots")]
+    display_folder = ", ".join(specific_folders) if specific_folders else (", ".join(folder_names) if folder_names else "")
+
+    if display_folder and not any("Telegram Folder:" in r for r in reasons):
+        reasons.insert(0, f"Folder: {display_folder}")
 
     return {
         "can_post": can_post,
@@ -377,14 +452,15 @@ def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
         "slowmode_seconds": slowmode_seconds,
         "auto_tags": json.dumps(sorted(list(set(tags)))),
         "category": category,
+        "folder_name": display_folder,
         "rules_summary": " · ".join(reasons) if reasons else "All standard posts, forwards & premium emojis allowed",
     }
 
 
 async def sync_account_destinations(account_id: int, deep_scan: bool = False) -> dict:
     """
-    Syncs all joined Groups, Supergroups, Channels, and Forum Topics from Telegram.
-    Also runs automatic permission + rule tag analysis.
+    Syncs all joined Groups, Supergroups, Channels, Forum Topics, and Telegram Chat Folders.
+    Also runs automatic permission + folder + rule tag analysis and cleans up any duplicates.
     """
     client = await get_or_create_client(account_id)
     if not await client.is_user_authorized():
@@ -394,54 +470,90 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = False) ->
         conn.close()
         raise ValueError("Telegram account is not authorized. Please log in again.")
 
+    # 1. Fetch user's Telegram Chat Folders (e.g. 'Withut emji ❌', 'Dnt forwrd ❌', 'Groups')
+    folder_map = await fetch_telegram_folder_map(client)
+
     dialogs = await client.get_dialogs(limit=None)
+    group_dialogs = [d for d in dialogs if (d.is_group or d.is_channel)]
+
+    # 2. If deep_scan is requested, fetch group description & pinned message concurrently (fast, bounded)
+    extra_rules: Dict[int, str] = {}
+    if deep_scan:
+        sem = asyncio.Semaphore(8)
+
+        async def _scan_one(d):
+            entity = d.entity
+            text_parts = []
+            async with sem:
+                try:
+                    if isinstance(entity, types.Channel):
+                        full = await asyncio.wait_for(
+                            client(functions.channels.GetFullChannelRequest(channel=entity)),
+                            timeout=2.5,
+                        )
+                        about = getattr(full.full_chat, "about", "") or ""
+                        if about:
+                            text_parts.append(about)
+                    elif isinstance(entity, types.Chat):
+                        full = await asyncio.wait_for(
+                            client(functions.messages.GetFullChatRequest(chat_id=entity.id)),
+                            timeout=2.5,
+                        )
+                        about = getattr(full.full_chat, "about", "") or ""
+                        if about:
+                            text_parts.append(about)
+                except Exception:
+                    pass
+                try:
+                    pinned = await asyncio.wait_for(
+                        client.get_messages(entity, filter=types.InputMessagesFilterPinned(), limit=1),
+                        timeout=2.0,
+                    )
+                    if pinned and len(pinned) > 0 and getattr(pinned[0], "message", None):
+                        text_parts.append(pinned[0].message)
+                except Exception:
+                    pass
+            if text_parts:
+                extra_rules[d.id] = " ".join(text_parts)
+
+        await asyncio.gather(*[_scan_one(d) for d in group_dialogs], return_exceptions=True)
+
     conn = get_conn()
+    # Clean up any legacy NULL topic_id duplicates before upserting
+    conn.execute("""
+        DELETE FROM destinations
+        WHERE id NOT IN (
+            SELECT MIN(id)
+            FROM destinations
+            GROUP BY account_id, telegram_id, COALESCE(topic_id, 0)
+        )
+    """)
+    conn.execute("UPDATE destinations SET topic_id = 0 WHERE topic_id IS NULL")
+
     synced_count = 0
 
-    for d in dialogs:
+    for d in group_dialogs:
         entity = d.entity
-        if not (d.is_group or d.is_channel):
-            continue
-
         title = d.title or "Untitled"
         username = getattr(entity, "username", "") or ""
         participants = getattr(entity, "participants_count", 0) or 0
         is_forum = getattr(entity, "forum", False)
         kind = "forum" if is_forum else ("channel" if getattr(entity, "broadcast", False) else "group")
 
-        rule_text = title
-        if deep_scan:
-            # Fetch group description / about and latest pinned message for rule keywords
-            try:
-                if isinstance(entity, types.Channel):
-                    full = await client(functions.channels.GetFullChannelRequest(channel=entity))
-                    about = getattr(full.full_chat, "about", "") or ""
-                    rule_text += " " + about
-                elif isinstance(entity, types.Chat):
-                    full = await client(functions.messages.GetFullChatRequest(chat_id=entity.id))
-                    about = getattr(full.full_chat, "about", "") or ""
-                    rule_text += " " + about
-            except Exception:
-                pass
-            try:
-                pinned = await client.get_messages(
-                    entity, filter=types.InputMessagesFilterPinned(), limit=1
-                )
-                if pinned and len(pinned) > 0 and getattr(pinned[0], "message", None):
-                    rule_text += " " + pinned[0].message
-            except Exception:
-                pass
-            await asyncio.sleep(0.08)
+        # Lookup folders by dialog ID (-100...) and raw entity ID
+        raw_ent_id = getattr(entity, "id", 0)
+        folders = list(dict.fromkeys((folder_map.get(d.id) or []) + (folder_map.get(raw_ent_id) or [])))
 
-        analysis = analyze_entity_and_rules(entity, rule_text)
+        rule_text = title + " " + extra_rules.get(d.id, "")
+        analysis = analyze_entity_and_rules(entity, rule_text, folders)
 
         conn.execute(
             """
             INSERT INTO destinations (
                 account_id, telegram_id, topic_id, title, parent_title, username,
                 kind, can_post, restriction_until, slowmode_seconds, participants_count,
-                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, updated_at
-            ) VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, folder_name, updated_at
+            ) VALUES (?, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id, telegram_id, topic_id) DO UPDATE SET
                 title=excluded.title,
                 username=excluded.username,
@@ -456,6 +568,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = False) ->
                 allow_links=excluded.allow_links,
                 allow_media=excluded.allow_media,
                 rules_summary=excluded.rules_summary,
+                folder_name=excluded.folder_name,
                 updated_at=excluded.updated_at
             """,
             (
@@ -474,6 +587,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = False) ->
                 analysis["allow_links"],
                 analysis["allow_media"],
                 analysis["rules_summary"],
+                analysis["folder_name"],
                 now_iso(),
             ),
         )
@@ -495,14 +609,14 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = False) ->
                     topic_id = getattr(topic, "id", None)
                     topic_closed = getattr(topic, "closed", False)
                     if topic_title and topic_id:
-                        t_analysis = analyze_entity_and_rules(entity, rule_text + " " + topic_title)
+                        t_analysis = analyze_entity_and_rules(entity, rule_text + " " + topic_title, folders)
                         conn.execute(
                             """
                             INSERT INTO destinations (
                                 account_id, telegram_id, topic_id, title, parent_title, username,
                                 kind, can_post, restriction_until, slowmode_seconds, participants_count,
-                                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, folder_name, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT(account_id, telegram_id, topic_id) DO UPDATE SET
                                 title=excluded.title,
                                 parent_title=excluded.parent_title,
@@ -513,12 +627,13 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = False) ->
                                 allow_links=excluded.allow_links,
                                 allow_media=excluded.allow_media,
                                 rules_summary=excluded.rules_summary,
+                                folder_name=excluded.folder_name,
                                 updated_at=excluded.updated_at
                             """,
                             (
                                 account_id,
                                 d.id,
-                                topic_id,
+                                int(topic_id),
                                 topic_title,
                                 title,
                                 username,
@@ -532,6 +647,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = False) ->
                                 t_analysis["allow_links"],
                                 t_analysis["allow_media"],
                                 t_analysis["rules_summary"],
+                                t_analysis["folder_name"],
                                 now_iso(),
                             ),
                         )
@@ -542,7 +658,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = False) ->
     conn.execute("UPDATE accounts SET last_sync_at = ?, status = 'connected' WHERE id = ?", (now_iso(), account_id))
     conn.commit()
     conn.close()
-    return {"count": synced_count, "deep_scan": deep_scan}
+    return {"count": synced_count, "deep_scan": deep_scan, "folders_detected": len(folder_map)}
 
 
 async def fetch_saved_messages(account_id: int, limit: int = 25) -> list:
@@ -586,22 +702,33 @@ def reset_daily_quota_if_needed(conn, acc: dict) -> int:
     return acc["sent_today"]
 
 
-async def send_saved_message_as_clean_copy(client: TelegramClient, source_msg_id: int, target_peer: int, topic_id: Optional[int] = None):
+async def send_saved_message_as_clean_copy(
+    client: TelegramClient,
+    source_msg_id: int,
+    target_peer: int,
+    topic_id: Optional[int] = None,
+    strip_custom_emoji: bool = False,
+):
     """
     Fetches the message from 'Saved Messages' ('me') and sends it as a brand new message
-    (preserving formatting entities, premium custom emojis, and media) WITHOUT the 'Forwarded from' header!
-    Used automatically for 'no_forward' groups.
+    WITHOUT the 'Forwarded from' header!
+    If strip_custom_emoji=True (for 'Withut emji ❌' / 'text_only' groups), strips
+    MessageEntityCustomEmoji so premium emojis automatically fall back to normal standard emojis.
     """
     src_msg = await client.get_messages("me", ids=int(source_msg_id))
     if not src_msg:
         raise ValueError(f"Saved message #{source_msg_id} not found in 'Saved Messages'")
 
+    entities = src_msg.entities
+    if strip_custom_emoji and entities:
+        entities = [e for e in entities if not isinstance(e, types.MessageEntityCustomEmoji)]
+
     sent = await client.send_message(
         entity=target_peer,
         message=src_msg.message or "",
         file=src_msg.media,
-        formatting_entities=src_msg.entities,
-        reply_to=int(topic_id) if topic_id else None,
+        formatting_entities=entities,
+        reply_to=int(topic_id) if (topic_id and int(topic_id) > 0) else None,
     )
     return sent.id if hasattr(sent, "id") else 0
 
@@ -737,16 +864,25 @@ async def execute_campaign_round(campaign: dict):
 
         try:
             target_peer = int(dest["telegram_id"])
-            topic_id = dest.get("topic_id")
+            raw_topic = dest.get("topic_id")
+            topic_id = int(raw_topic) if (raw_topic and int(raw_topic) > 0) else None
             delivery_note = "Delivered OK"
+            strip_emoji = (dest_cat == "text_only" or "no_emoji" in dest_tags or "text_only" in dest_tags)
 
             if tmpl["mode"] == "forward" and tmpl.get("source_message_id"):
-                # Check if group blocks forwards -> automatically send as clean copy without 'Forwarded from' tag!
-                if not dest.get("allow_forwards", 1) or dest_cat == "no_forward" or "no_forward" in dest_tags:
+                # Check if group blocks forwards OR requires stripping premium emojis -> send as clean copy!
+                if strip_emoji or not dest.get("allow_forwards", 1) or dest_cat == "no_forward" or "no_forward" in dest_tags:
                     msg_id = await send_saved_message_as_clean_copy(
-                        client, int(tmpl["source_message_id"]), target_peer, topic_id
+                        client,
+                        int(tmpl["source_message_id"]),
+                        target_peer,
+                        topic_id,
+                        strip_custom_emoji=strip_emoji,
                     )
-                    delivery_note = "Sent as Clean Copy (No-Forward Rule Bypass)"
+                    if strip_emoji:
+                        delivery_note = "Sent without Premium Emojis (Clean Copy)"
+                    else:
+                        delivery_note = "Sent as Clean Copy (No-Forward Rule Bypass)"
                 else:
                     try:
                         if topic_id:
@@ -770,7 +906,11 @@ async def execute_campaign_round(campaign: dict):
                     except ChatForwardsRestrictedError:
                         # Auto-learn that this group blocks forwards and fallback to Clean Copy!
                         msg_id = await send_saved_message_as_clean_copy(
-                            client, int(tmpl["source_message_id"]), target_peer, topic_id
+                            client,
+                            int(tmpl["source_message_id"]),
+                            target_peer,
+                            topic_id,
+                            strip_custom_emoji=strip_emoji,
                         )
                         conn_learn = get_conn()
                         conn_learn.execute(

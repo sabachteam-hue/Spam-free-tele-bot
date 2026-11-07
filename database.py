@@ -57,7 +57,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         account_id INTEGER NOT NULL,
         telegram_id INTEGER NOT NULL,
-        topic_id INTEGER DEFAULT NULL,
+        topic_id INTEGER NOT NULL DEFAULT 0,
         title TEXT NOT NULL,
         parent_title TEXT DEFAULT NULL,
         username TEXT DEFAULT '',
@@ -72,6 +72,7 @@ def init_db():
         allow_links INTEGER DEFAULT 1,
         allow_media INTEGER DEFAULT 1,
         rules_summary TEXT DEFAULT '',
+        folder_name TEXT DEFAULT '',
         last_sent_at TEXT DEFAULT NULL,
         updated_at TEXT,
         UNIQUE(account_id, telegram_id, topic_id)
@@ -87,11 +88,23 @@ def init_db():
         "allow_links": "INTEGER DEFAULT 1",
         "allow_media": "INTEGER DEFAULT 1",
         "rules_summary": "TEXT DEFAULT ''",
+        "folder_name": "TEXT DEFAULT ''",
         "last_sent_at": "TEXT DEFAULT NULL",
     }
     for col, col_def in migrations.items():
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE destinations ADD COLUMN {col} {col_def}")
+
+    # Deduplicate any rows where topic_id was NULL and normalize topic_id NULL -> 0
+    cur.execute("""
+        DELETE FROM destinations
+        WHERE id NOT IN (
+            SELECT MIN(id)
+            FROM destinations
+            GROUP BY account_id, telegram_id, COALESCE(topic_id, 0)
+        )
+    """)
+    cur.execute("UPDATE destinations SET topic_id = 0 WHERE topic_id IS NULL")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS templates (
