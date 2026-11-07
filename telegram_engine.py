@@ -998,6 +998,213 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     return {"count": synced_count, "deep_scan": deep_scan, "folders_detected": len(folder_map)}
 
 
+def _extract_rich_text_node(node) -> Tuple[str, int]:
+    """
+    Recursively extracts readable text and custom emoji count from Telegram RichText / TextWithEntities nodes.
+    """
+    if node is None:
+        return ("", 0)
+    if isinstance(node, str):
+        return (node, 0)
+
+    cls_name = type(node).__name__
+    if cls_name == "TextEmpty":
+        return ("", 0)
+    if cls_name == "TextPlain":
+        return (str(getattr(node, "text", "") or ""), 0)
+    if cls_name == "TextCustomEmoji":
+        alt = str(getattr(node, "alt", "") or "")
+        return (alt, 1)
+    if cls_name == "TextConcat":
+        parts = []
+        emojis = 0
+        for sub in getattr(node, "texts", []) or []:
+            t, c = _extract_rich_text_node(sub)
+            if t:
+                parts.append(t)
+            emojis += c
+        return ("".join(parts), emojis)
+    if cls_name == "TextWithEntities":
+        txt = str(getattr(node, "text", "") or "")
+        ents = getattr(node, "entities", None) or []
+        c = sum(1 for e in ents if isinstance(e, types.MessageEntityCustomEmoji))
+        return (txt, c)
+
+    # Wrapper text nodes: TextBold, TextItalic, TextUnderline, TextStrike, TextFixed, TextUrl, TextMarked, TextSpoiler, etc.
+    inner = getattr(node, "text", None)
+    if inner is not None and inner is not node:
+        return _extract_rich_text_node(inner)
+
+    return ("", 0)
+
+
+def _extract_page_block_node(block) -> Tuple[List[str], int, List[str]]:
+    """
+    Recursively extracts lines, custom emoji count, and button labels from Telegram RichMessage PageBlocks.
+    """
+    lines: List[str] = []
+    emojis = 0
+    buttons: List[str] = []
+    if block is None:
+        return (lines, emojis, buttons)
+
+    cls_name = type(block).__name__
+
+    if cls_name == "PageBlockTable":
+        title_node = getattr(block, "title", None)
+        if title_node:
+            t_str, t_em = _extract_rich_text_node(title_node)
+            emojis += t_em
+            if t_str.strip():
+                lines.append(t_str.strip())
+        for row in getattr(block, "rows", []) or []:
+            cell_texts = []
+            for cell in getattr(row, "cells", []) or []:
+                c_str, c_em = _extract_rich_text_node(getattr(cell, "text", None))
+                emojis += c_em
+                if c_str.strip():
+                    cell_texts.append(c_str.strip())
+            if cell_texts:
+                lines.append("  —  ".join(cell_texts))
+        return (lines, emojis, buttons)
+
+    if cls_name == "PageBlockButtonRow":
+        row_btns = []
+        for btn in getattr(block, "buttons", []) or []:
+            b_str, b_em = _extract_rich_text_node(getattr(btn, "text", None))
+            emojis += b_em
+            if b_str.strip():
+                row_btns.append(b_str.strip())
+        if row_btns:
+            joined = "  |  ".join(row_btns)
+            buttons.append(joined)
+        return (lines, emojis, buttons)
+
+    if cls_name in ("PageBlockList", "PageBlockOrderedList"):
+        for item in getattr(block, "items", []) or []:
+            if hasattr(item, "text"):
+                i_str, i_em = _extract_rich_text_node(getattr(item, "text", None))
+                emojis += i_em
+                if i_str.strip():
+                    lines.append(f"• {i_str.strip()}")
+            if hasattr(item, "blocks"):
+                for sub_b in getattr(item, "blocks", []) or []:
+                    sub_l, sub_e, sub_btn = _extract_page_block_node(sub_b)
+                    lines.extend(sub_l)
+                    emojis += sub_e
+                    buttons.extend(sub_btn)
+        return (lines, emojis, buttons)
+
+    if hasattr(block, "blocks") and getattr(block, "blocks", None):
+        for sub_b in getattr(block, "blocks", []) or []:
+            sub_l, sub_e, sub_btn = _extract_page_block_node(sub_b)
+            lines.extend(sub_l)
+            emojis += sub_e
+            buttons.extend(sub_btn)
+
+    if hasattr(block, "text") and getattr(block, "text", None) is not None:
+        t_str, t_em = _extract_rich_text_node(getattr(block, "text", None))
+        emojis += t_em
+        if t_str.strip():
+            lines.append(t_str.strip())
+
+    if hasattr(block, "caption") and getattr(block, "caption", None) is not None:
+        cap = getattr(block, "caption", None)
+        c_str, c_em = _extract_rich_text_node(getattr(cap, "text", cap))
+        emojis += c_em
+        if c_str.strip():
+            lines.append(c_str.strip())
+
+    return (lines, emojis, buttons)
+
+
+def extract_full_message_details(m) -> Tuple[str, int, List[str]]:
+    """
+    Extracts full readable text, total custom emoji count, and button rows from ANY Telegram message:
+    - Standard messages (m.message + m.entities)
+    - Telegram RichMessage tables/cards (m.rich_message.blocks — e.g. SMF SHOP product tables)
+    - Todo / Checklist media (MessageMediaToDo)
+    - WebPage / Poll / Invoice / Game media
+    - Inline keyboard buttons (m.reply_markup)
+    """
+    msg_text = getattr(m, "message", None) or getattr(m, "raw_text", None) or ""
+    entities = getattr(m, "entities", None) or []
+    custom_emoji_count = sum(1 for e in entities if isinstance(e, types.MessageEntityCustomEmoji))
+
+    button_rows: List[str] = []
+    reply_markup = getattr(m, "reply_markup", None)
+    if reply_markup and getattr(reply_markup, "rows", None):
+        for row in reply_markup.rows:
+            row_btns = []
+            for btn in getattr(row, "buttons", []) or []:
+                b_txt = (getattr(btn, "text", None) or "").strip()
+                if b_txt:
+                    row_btns.append(b_txt)
+            if row_btns:
+                button_rows.append("  |  ".join(row_btns))
+
+    rich_lines: List[str] = []
+    rich_msg = getattr(m, "rich_message", None)
+    if rich_msg and getattr(rich_msg, "blocks", None):
+        for blk in rich_msg.blocks:
+            b_lines, b_emojis, b_btns = _extract_page_block_node(blk)
+            rich_lines.extend(b_lines)
+            custom_emoji_count += b_emojis
+            for rb in b_btns:
+                if rb not in button_rows:
+                    button_rows.append(rb)
+
+    media = getattr(m, "media", None)
+    media_extra_lines: List[str] = []
+    if isinstance(media, types.MessageMediaWebPage):
+        wp = getattr(media, "webpage", None)
+        if wp:
+            wp_title = (getattr(wp, "title", None) or getattr(wp, "site_name", None) or "").strip()
+            wp_desc = (getattr(wp, "description", None) or "").strip()
+            if wp_title:
+                media_extra_lines.append(wp_title)
+            if wp_desc:
+                media_extra_lines.append(wp_desc)
+    elif getattr(media, "todo", None) is not None:
+        todo_obj = getattr(media, "todo", None)
+        t_title, t_em = _extract_rich_text_node(getattr(todo_obj, "title", None))
+        custom_emoji_count += t_em
+        if t_title.strip():
+            media_extra_lines.append(t_title.strip())
+        for item in getattr(todo_obj, "list", []) or []:
+            i_title, i_em = _extract_rich_text_node(getattr(item, "title", None))
+            custom_emoji_count += i_em
+            if i_title.strip():
+                media_extra_lines.append(f"• {i_title.strip()}")
+    elif media is not None:
+        for attr_name in ("title", "description"):
+            val = getattr(media, attr_name, None)
+            if val:
+                v_str, v_em = _extract_rich_text_node(val)
+                custom_emoji_count += v_em
+                if v_str.strip():
+                    media_extra_lines.append(v_str.strip())
+        poll_obj = getattr(media, "poll", None)
+        if poll_obj:
+            q_str, q_em = _extract_rich_text_node(getattr(poll_obj, "question", None))
+            custom_emoji_count += q_em
+            if q_str.strip():
+                media_extra_lines.append(f"📊 Poll: {q_str.strip()}")
+
+    parts: List[str] = []
+    if msg_text.strip():
+        parts.append(msg_text.strip())
+    if rich_lines:
+        parts.append("\n".join(rich_lines))
+    if media_extra_lines:
+        parts.extend(media_extra_lines)
+    if button_rows:
+        parts.append("\n".join(f"🔘 {r}" for r in button_rows))
+
+    full_text = "\n\n".join(parts).strip()
+    return (full_text, custom_emoji_count, button_rows)
+
+
 async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
     """
     Fetches all recent AND pinned messages from 'Saved Messages' ('me' / InputPeerSelf),
@@ -1075,8 +1282,9 @@ async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
         msg_text = getattr(m, "message", None) or getattr(m, "raw_text", None) or ""
         fwd = getattr(m, "fwd_from", None)
         media = getattr(m, "media", None)
+        rich_msg = getattr(m, "rich_message", None)
 
-        if not msg_text and not media and not fwd:
+        if not msg_text and not media and not fwd and not rich_msg:
             continue
 
         # Detect forwarded source name
@@ -1106,58 +1314,12 @@ async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
             media_type = "document"
         elif isinstance(media, types.MessageMediaWebPage):
             media_type = "webpage"
+        elif rich_msg is not None:
+            media_type = "rich table"
 
-        entities = getattr(m, "entities", None) or []
-        custom_emoji_count = sum(1 for e in entities if isinstance(e, types.MessageEntityCustomEmoji))
         is_pinned = bool(getattr(m, "pinned", False))
+        display_text, custom_emoji_count, button_rows = extract_full_message_details(m)
 
-        # Extract inline keyboard buttons if present (e.g. shop product rows / 'More Products' buttons)
-        button_rows = []
-        reply_markup = getattr(m, "reply_markup", None)
-        if reply_markup and getattr(reply_markup, "rows", None):
-            for row in reply_markup.rows:
-                row_btns = []
-                for btn in getattr(row, "buttons", []) or []:
-                    b_txt = (getattr(btn, "text", None) or "").strip()
-                    if b_txt:
-                        row_btns.append(b_txt)
-                if row_btns:
-                    button_rows.append("  |  ".join(row_btns))
-
-        # Extract extra text from webpage / poll / invoice / game media if present
-        media_extra_lines = []
-        if isinstance(media, types.MessageMediaWebPage):
-            wp = getattr(media, "webpage", None)
-            if wp:
-                wp_title = (getattr(wp, "title", None) or getattr(wp, "site_name", None) or "").strip()
-                wp_desc = (getattr(wp, "description", None) or "").strip()
-                if wp_title:
-                    media_extra_lines.append(wp_title)
-                if wp_desc:
-                    media_extra_lines.append(wp_desc)
-        elif media is not None:
-            for attr_name in ("title", "description"):
-                val = (getattr(media, attr_name, None) or "").strip()
-                if val:
-                    media_extra_lines.append(val)
-            poll_obj = getattr(media, "poll", None)
-            if poll_obj:
-                q_obj = getattr(poll_obj, "question", None)
-                q_txt = getattr(q_obj, "text", None) if hasattr(q_obj, "text") else str(q_obj or "")
-                if q_txt.strip():
-                    media_extra_lines.append(f"📊 Poll: {q_txt.strip()}")
-
-        parts = []
-        if msg_text.strip():
-            parts.append(msg_text.strip())
-        elif msg_text and custom_emoji_count > 0:
-            parts.append(f"✨ ({custom_emoji_count} Premium Custom Emojis) {msg_text}")
-        if media_extra_lines:
-            parts.extend(media_extra_lines)
-        if button_rows:
-            parts.append("\n".join(f"🔘 {r}" for r in button_rows))
-
-        display_text = "\n\n".join(parts).strip()
         if not display_text:
             if forwarded_from:
                 display_text = f"[Forwarded from {forwarded_from}] ({media_type.upper()})"
@@ -1178,6 +1340,25 @@ async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
                 "date": dt_obj.isoformat() if dt_obj else "",
             }
         )
+
+    # Also auto-heal any existing templates in SQLite that had '[Forwarded from ...' placeholder text
+    try:
+        conn_t = get_conn()
+        for item in results:
+            if item["text"] and not item["text"].startswith("[Forwarded from"):
+                conn_t.execute(
+                    """
+                    UPDATE templates
+                    SET content = ?
+                    WHERE source_account_id = ? AND source_message_id = ? AND (content IS NULL OR content = '' OR content LIKE '[Forwarded from%')
+                    """,
+                    (item["text"][:4000], account_id, int(item["id"])),
+                )
+        conn_t.commit()
+        conn_t.close()
+    except Exception:
+        pass
+
     return results
 
 
@@ -1205,10 +1386,10 @@ async def send_saved_message_as_clean_copy(
     Fetches the message from 'Saved Messages' ('me') and sends it WITHOUT the 'Forwarded from' header!
     - If strip_custom_emoji=False (No-Forward groups that allow Premium Emojis): uses Telegram's native
       drop_author=True forward (or clean send_message fallback) so the 'Forwarded from' tag is 100% removed
-      while keeping Premium Emojis intact.
+      while keeping Premium Emojis & Rich Tables intact.
     - If strip_custom_emoji=True ('Withut emji ❌' / 'No Emoji / Text Only' groups): strips all
-      MessageEntityCustomEmoji so premium emojis automatically fall back to normal standard emojis / plain text,
-      and also sends without the 'Forwarded from' header.
+      MessageEntityCustomEmoji / TextCustomEmoji so premium emojis automatically fall back to normal standard
+      emojis / plain text, and also sends without the 'Forwarded from' header.
     """
     if not strip_custom_emoji:
         try:
@@ -1240,18 +1421,45 @@ async def send_saved_message_as_clean_copy(
     if not src_msg:
         raise ValueError(f"Saved message #{source_msg_id} not found in 'Saved Messages'")
 
-    entities = list(src_msg.entities or [])
+    extracted_text, _, _ = extract_full_message_details(src_msg)
+    raw_msg_str = getattr(src_msg, "message", None) or ""
+    msg_body = raw_msg_str if raw_msg_str.strip() else extracted_text
+
+    entities = list(src_msg.entities or []) if raw_msg_str.strip() else []
     if strip_custom_emoji and entities:
         entities = [e for e in entities if not isinstance(e, types.MessageEntityCustomEmoji)]
 
     media_file = None
     if allow_media and not strip_custom_emoji and src_msg.media:
-        if not isinstance(src_msg.media, types.MessageMediaWebPage):
+        if not isinstance(src_msg.media, (types.MessageMediaWebPage, types.MessageMediaUnsupported, types.MessageMediaToDo)):
             media_file = src_msg.media
+
+    if not msg_body.strip() and media_file is None:
+        # Final fallback: server-side forward with drop_author=True so it never fails with 'message is empty'
+        req_kwargs = {
+            "from_peer": "me",
+            "id": [int(source_msg_id)],
+            "to_peer": target_peer,
+            "drop_author": True,
+            "random_id": [random.randint(-2**63, 2**63 - 1)],
+        }
+        if topic_id and int(topic_id) > 0:
+            req_kwargs["top_msg_id"] = int(topic_id)
+        sent_upd = await client(functions.messages.ForwardMessagesRequest(**req_kwargs))
+        msg_id = getattr(sent_upd, "id", 0)
+        if not msg_id and hasattr(sent_upd, "updates"):
+            for upd in getattr(sent_upd, "updates", []) or []:
+                if hasattr(upd, "message") and hasattr(upd.message, "id"):
+                    msg_id = upd.message.id
+                    break
+                elif hasattr(upd, "id") and isinstance(upd.id, int):
+                    msg_id = upd.id
+                    break
+        return msg_id
 
     sent = await client.send_message(
         entity=target_peer,
-        message=src_msg.message or "",
+        message=msg_body,
         file=media_file,
         formatting_entities=entities if entities else None,
         link_preview=False,
