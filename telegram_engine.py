@@ -349,18 +349,52 @@ def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional
             tags.append("no_links")
             reasons.append(f"Telegram Folder: {fn} (No Links)")
 
-    # 2. Parse rule text (English + Vietnamese + Urdu/Hindi transliteration keywords)
+    # 2. Parse rule text + pinned messages + moderation bot messages (English + Vietnamese + Urdu/Hindi)
     txt = (rule_text or "").lower()
-    if any(k in txt for k in ["no forward", "don't forward", "do not forward", "forwarding not allowed", "cấm forward", "không forward"]):
+
+    # No-Forward detection from rules & bot warnings
+    if any(
+        k in txt
+        for k in [
+            "no forward",
+            "don't forward",
+            "do not forward",
+            "forwarding not allowed",
+            "forwarding is not allowed",
+            "forward not allowed",
+            "no forwarded",
+            "cấm forward",
+            "không forward",
+            "cấm chuyển tiếp",
+            "không chuyển tiếp",
+            "tin nhắn chuyển tiếp",
+        ]
+    ):
         allow_forwards = 0
         if not any("No Forwarding" in r for r in reasons):
-            reasons.append("Rule: No Forwarding")
+            reasons.append("Bot/Group Rule: No Forwarding")
 
-    if any(k in txt for k in ["no link", "links not allowed", "don't send link", "cấm link", "không chèn link", "no url"]):
+    # No-Link detection from rules & bot warnings
+    if any(
+        k in txt
+        for k in [
+            "no link",
+            "links not allowed",
+            "links are not allowed",
+            "don't send link",
+            "no external link",
+            "cấm link",
+            "không chèn link",
+            "không gửi link",
+            "link bị cấm",
+            "no url",
+        ]
+    ):
         allow_links = 0
         if not any("No Links" in r for r in reasons):
-            reasons.append("Rule: No Links")
+            reasons.append("Bot/Group Rule: No Links")
 
+    # 24h / Daily post limit detection from rules & bot warnings
     if slowmode_seconds >= 3600 or any(
         k in txt
         for k in [
@@ -369,23 +403,48 @@ def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional
             "24 hours",
             "1 post per day",
             "1 post/day",
+            "1 post / day",
             "once a day",
             "once per day",
+            "one post per day",
+            "only 1 post",
             "1 bài/ngày",
+            "1 bài / ngày",
             "1 lần/ngày",
             "mỗi ngày 1",
+            "giới hạn bài đăng",
+            "spam quá",
         ]
     ):
         is_24h = True
         if not any("24h" in r for r in reasons):
-            reasons.append("Rule: 1 Post / 24h")
+            reasons.append("Bot/Group Rule: 1 Post / 24h")
 
-    if any(k in txt for k in ["no emoji", "no custom emoji", "without emoji", "withut emji", "no sticker", "no media", "text only", "cấm emoji"]):
+    # No Emoji / No Custom Emoji / Sticker restriction detection from rules & bot warnings
+    if any(
+        k in txt
+        for k in [
+            "no emoji",
+            "no custom emoji",
+            "no premium emoji",
+            "emoji not allowed",
+            "emojis not allowed",
+            "without emoji",
+            "withut emji",
+            "no sticker",
+            "text only",
+            "cấm emoji",
+            "không dùng emoji",
+            "emoji premium",
+            "cấm icon",
+            "không dùng icon",
+        ]
+    ):
         is_no_emoji = True
         tags.append("text_only")
         tags.append("no_emoji")
         if not any("No Premium Emoji" in r for r in reasons):
-            reasons.append("Rule: No Premium Emoji / Text Only")
+            reasons.append("Bot/Group Rule: No Premium Emoji / Text Only")
     elif allow_media and not is_no_emoji:
         tags.append("premium_emoji_ok")
 
@@ -476,15 +535,22 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     dialogs = await client.get_dialogs(limit=None)
     group_dialogs = [d for d in dialogs if (d.is_group or d.is_channel)]
 
-    # 2. If deep_scan is requested, fetch group description & pinned message concurrently (fast, bounded)
+    # 2. Deep-scan group description, pinned rules, AND recent moderation bot messages/warnings concurrently
     extra_rules: Dict[int, str] = {}
     if deep_scan:
         sem = asyncio.Semaphore(8)
+        rule_indicators = (
+            "rule", "nội quy", "quy định", "warning", "cảnh cáo", "cảnh báo",
+            "muted", "banned", "khóa mõm", "cấm", "không được", "not allowed",
+            "prohibited", "strictly", "no forward", "no emoji", "no link",
+            "24h", "1 bài", "1 post", "🚫", "⚠️", "❌"
+        )
 
         async def _scan_one(d):
             entity = d.entity
             text_parts = []
             async with sem:
+                # A) Group Description / Bio
                 try:
                     if isinstance(entity, types.Channel):
                         full = await asyncio.wait_for(
@@ -504,15 +570,37 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                             text_parts.append(about)
                 except Exception:
                     pass
+
+                # B) Up to 3 Pinned Rules Messages
                 try:
                     pinned = await asyncio.wait_for(
-                        client.get_messages(entity, filter=types.InputMessagesFilterPinned(), limit=1),
-                        timeout=2.0,
+                        client.get_messages(entity, filter=types.InputMessagesFilterPinned(), limit=3),
+                        timeout=2.5,
                     )
-                    if pinned and len(pinned) > 0 and getattr(pinned[0], "message", None):
-                        text_parts.append(pinned[0].message)
+                    for pm in (pinned or []):
+                        if getattr(pm, "message", None):
+                            text_parts.append(pm.message)
                 except Exception:
                     pass
+
+                # C) Recent 20 Group Messages — Extract Moderation Bot warnings (Rose, GroupHelp, vocvn_bot, etc.) & Admin Rules
+                try:
+                    recent_msgs = await asyncio.wait_for(
+                        client.get_messages(entity, limit=20),
+                        timeout=2.5,
+                    )
+                    for rm in (recent_msgs or []):
+                        msg_txt = getattr(rm, "message", None) or ""
+                        if not msg_txt:
+                            continue
+                        sender = getattr(rm, "sender", None)
+                        is_bot = bool(getattr(sender, "bot", False))
+                        sender_uname = (getattr(sender, "username", "") or "").lower()
+                        if is_bot or sender_uname.endswith("bot") or any(ind in msg_txt.lower() for ind in rule_indicators):
+                            text_parts.append(msg_txt)
+                except Exception:
+                    pass
+
             if text_parts:
                 extra_rules[d.id] = " ".join(text_parts)
 
@@ -944,6 +1032,45 @@ async def execute_campaign_round(campaign: dict):
             conn.commit()
             conn.close()
             log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "sent", delivery_note, msg_id)
+
+            # Live Self-Learning Guard: Check if a moderation bot (Rose, GroupHelp, vocvn_bot, etc.)
+            # immediately warned or deleted the post due to a group rule
+            try:
+                await asyncio.sleep(2.2)
+                after_msgs = await asyncio.wait_for(client.get_messages(target_peer, limit=3), timeout=2.0)
+                for am in (after_msgs or []):
+                    sender = getattr(am, "sender", None)
+                    if not getattr(sender, "bot", False):
+                        continue
+                    btxt = (getattr(am, "message", None) or "").lower()
+                    if not btxt:
+                        continue
+                    learned_cat = None
+                    learned_rule = None
+                    if any(w in btxt for w in ["emoji", "cấm icon", "custom emoji", "sticker"]):
+                        learned_cat = "text_only"
+                        learned_rule = "Bot Auto-Detected: No Premium Emojis"
+                    elif any(w in btxt for w in ["forward", "chuyển tiếp"]):
+                        learned_cat = "no_forward"
+                        learned_rule = "Bot Auto-Detected: No Forwarding"
+                    elif any(w in btxt for w in ["24h", "1 bài", "1 post", "once a day", "mỗi ngày 1"]):
+                        learned_cat = "24h_once"
+                        learned_rule = "Bot Auto-Detected: 1 Post / 24h Limit"
+                    elif any(w in btxt for w in ["no link", "cấm link", "không chèn link", "link not allowed"]):
+                        learned_cat = "no_links"
+                        learned_rule = "Bot Auto-Detected: No Links"
+                    if learned_cat and learned_cat != dest_cat:
+                        new_tags = sorted(list(set(dest_tags + [learned_cat])))
+                        conn_bot = get_conn()
+                        conn_bot.execute(
+                            "UPDATE destinations SET category = ?, auto_tags = ?, allow_forwards = CASE WHEN ? = 'no_forward' THEN 0 ELSE allow_forwards END, rules_summary = ? WHERE id = ?",
+                            (learned_cat, json.dumps(new_tags), learned_cat, learned_rule, dest_id),
+                        )
+                        conn_bot.commit()
+                        conn_bot.close()
+                        break
+            except Exception:
+                pass
 
         except SlowModeWaitError as e:
             safe_until = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 300)
