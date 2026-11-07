@@ -457,7 +457,7 @@ def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional
     }
 
 
-async def sync_account_destinations(account_id: int, deep_scan: bool = False) -> dict:
+async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> dict:
     """
     Syncs all joined Groups, Supergroups, Channels, Forum Topics, and Telegram Chat Folders.
     Also runs automatic permission + folder + rule tag analysis and cleans up any duplicates.

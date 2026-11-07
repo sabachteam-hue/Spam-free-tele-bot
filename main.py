@@ -177,6 +177,11 @@ async def create_account(payload: AccountCreate):
     acc_id = cur.lastrowid
     conn.commit()
     conn.close()
+    if status == "connected":
+        try:
+            await sync_account_destinations(acc_id, deep_scan=True)
+        except Exception:
+            pass
     return {"id": acc_id, "status": status}
 
 
@@ -236,7 +241,7 @@ async def login_qr_status(account_id: int):
 
 
 @app.post("/api/telegram/accounts/{account_id}/sync")
-async def sync_destinations(account_id: int, deep_scan: bool = False):
+async def sync_destinations(account_id: int, deep_scan: bool = True):
     try:
         return await sync_account_destinations(account_id, deep_scan=deep_scan)
     except Exception as e:
