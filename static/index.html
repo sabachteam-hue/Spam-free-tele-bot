@@ -1607,22 +1607,6 @@
       }
     }
 
-    function toggleTemplateFullView(id) {
-      const box = document.getElementById(`tmpl-card-content-${id}`);
-      const btn = document.getElementById(`tmpl-card-viewbtn-${id}`);
-      if (!box) return;
-      const isClamped = box.classList.contains('line-clamp-3');
-      if (isClamped) {
-        box.classList.remove('line-clamp-3');
-        box.classList.add('max-h-72', 'overflow-y-auto', 'border-[#1a2b88]', 'bg-blue-50/30');
-        if (btn) btn.innerText = 'Hide Message';
-      } else {
-        box.classList.add('line-clamp-3');
-        box.classList.remove('max-h-72', 'overflow-y-auto', 'border-[#1a2b88]', 'bg-blue-50/30');
-        if (btn) btn.innerText = 'View Message';
-      }
-    }
-
     function renderTemplates() {
       const box = document.getElementById('templates-list');
       if (!STATE.templates.length) {
@@ -1638,12 +1622,11 @@
                 ${t.mode === 'forward' ? `Saved Msg #${t.source_message_id} (Forward / Clean Copy)` : 'Spintax / Text'}
               </span>
             </div>
-            <div id="tmpl-card-content-${t.id}" class="text-xs text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-xl whitespace-pre-wrap line-clamp-3 transition">${(t.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            <div class="text-xs text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-xl whitespace-pre-wrap line-clamp-3">${(t.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
           </div>
           <div class="flex items-center justify-between pt-2 text-xs text-slate-400 flex-wrap gap-2">
             <span>${t.source_account_name ? `Source: ${t.source_account_name}` : 'All Accounts Compatible'}</span>
             <div class="flex items-center gap-2">
-              <button id="tmpl-card-viewbtn-${t.id}" onclick="toggleTemplateFullView(${t.id})" class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-bold hover:bg-slate-200 transition">View Message</button>
               <button onclick="openEditTemplateModal(${t.id})" class="px-2.5 py-1 rounded-lg bg-indigo-50 text-[#1a2b88] font-bold hover:bg-indigo-100 transition">Edit</button>
               <button onclick="deleteTemplate(${t.id})" class="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-600 font-bold hover:bg-rose-100 transition">Delete</button>
             </div>
