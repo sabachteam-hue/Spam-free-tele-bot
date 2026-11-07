@@ -100,6 +100,7 @@ def init_db():
         "is_deleted": "INTEGER NOT NULL DEFAULT 0",
         "user_modified_category": "INTEGER NOT NULL DEFAULT 0",
         "last_sent_at": "TEXT DEFAULT NULL",
+        "last_sent_msg_id": "INTEGER DEFAULT NULL",
         "restriction_reason": "TEXT DEFAULT ''",
     }
     for col, col_def in migrations.items():

@@ -408,6 +408,45 @@ def analyze_entity_and_rules(
     # 2. Parse official rule text (Group Bio + Pinned Rules + Moderation Bot Messages ONLY — never regular seller ads)
     txt = (rule_text or "").lower()
 
+    # Check if this is a public discussion chat where Admins explicitly forbid marketing / selling / advertising
+    if not is_creator and not is_admin and not chat_behavior.get("has_active_sellers"):
+        if any(
+            k in txt
+            for k in [
+                "no promo",
+                "no promotion",
+                "no advertising",
+                "advertising not allowed",
+                "no selling",
+                "selling not allowed",
+                "no marketing",
+                "ads = ban",
+                "promo = ban",
+                "ad = ban",
+                "cấm quảng cáo",
+                "không quảng cáo",
+                "cấm bán hàng",
+                "không bán hàng",
+                "cấm mua bán",
+            ]
+        ):
+            can_post = 0
+            reasons.append("Restricted: Public Chat — Admin Does Not Allow Marketing/Selling Ads")
+            specific_folders = [f for f in folder_names if f.lower() not in ("groups", "channels", "all", "bots")]
+            display_folder = ", ".join(specific_folders) if specific_folders else (", ".join(folder_names) if folder_names else "")
+            return {
+                "can_post": 0,
+                "restriction_until": restriction_until,
+                "allow_forwards": 0,
+                "allow_links": 0,
+                "allow_media": 0,
+                "slowmode_seconds": slowmode_seconds,
+                "auto_tags": json.dumps(["restricted"]),
+                "category": "restricted",
+                "folder_name": display_folder,
+                "rules_summary": " · ".join(reasons),
+            }
+
     # No-Forward detection from official rules, bot warnings, or seller chat behavior
     if any(
         k in txt
@@ -756,6 +795,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
             "inferred_no_emoji": False,
             "bot_enforces_24h": False,
             "sellers_use_custom_emoji": False,
+            "has_active_sellers": False,
         }
         is_creator_or_admin = bool(getattr(entity, "creator", False)) or bool(getattr(entity, "admin_rights", None))
         async with sem:
@@ -836,8 +876,10 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                     real_msgs = [rm for rm in (recent_msgs or []) if getattr(rm, "message", None) or getattr(rm, "media", None)]
                     bot_or_admin_count = 0
                     seller_msg_count = 0
+                    seller_ad_hits = 0
                     seller_fwd_count = 0
                     has_strict_mod_bot = False
+                    ad_keywords = ("$", "usdt", "vnd", "₫", "giá", "price", "buy", "sell", "mua", "bán", "stock", "acc", "dm", "ib", "inbox", "shop", "store")
 
                     for rm in real_msgs:
                         msg_txt = getattr(rm, "message", None) or ""
@@ -864,12 +906,18 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                                 behavior["bot_enforces_24h"] = True
                         else:
                             seller_msg_count += 1
+                            low_s_msg = msg_txt.lower()
+                            if any(ak in low_s_msg for ak in ad_keywords) or getattr(rm, "rich_message", None) is not None:
+                                seller_ad_hits += 1
                             if getattr(rm, "fwd_from", None) is not None:
                                 seller_fwd_count += 1
                             for ent in getattr(rm, "entities", None) or []:
                                 if isinstance(ent, types.MessageEntityCustomEmoji):
                                     behavior["sellers_use_custom_emoji"] = True
                                     break
+
+                    if seller_ad_hits >= 2:
+                        behavior["has_active_sellers"] = True
 
                     # If a group has >= 4 recent messages and 100% of them are from Bots or anonymous channel admins (e.g. VEXORIX BOT LOGS, GGSoma Group), normal users cannot post
                     if not is_creator_or_admin and len(real_msgs) >= 4 and bot_or_admin_count == len(real_msgs):
@@ -950,11 +998,17 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 title=excluded.title,
                 username=excluded.username,
                 kind=excluded.kind,
-                can_post=excluded.can_post,
-                restriction_until=excluded.restriction_until,
+                can_post=CASE
+                    WHEN COALESCE(destinations.user_modified_category, 0) = 1 AND destinations.category = 'restricted' THEN 0
+                    ELSE excluded.can_post
+                END,
+                restriction_until=COALESCE(excluded.restriction_until, destinations.restriction_until),
                 slowmode_seconds=excluded.slowmode_seconds,
                 participants_count=excluded.participants_count,
-                auto_tags=excluded.auto_tags,
+                auto_tags=CASE
+                    WHEN COALESCE(destinations.user_modified_category, 0) = 1 AND destinations.category = 'restricted' THEN '["restricted"]'
+                    ELSE excluded.auto_tags
+                END,
                 category=CASE
                     WHEN excluded.can_post = 0 THEN 'restricted'
                     WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.category
@@ -963,7 +1017,10 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 allow_forwards=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.allow_forwards ELSE excluded.allow_forwards END,
                 allow_links=excluded.allow_links,
                 allow_media=excluded.allow_media,
-                rules_summary=excluded.rules_summary,
+                rules_summary=CASE
+                    WHEN COALESCE(destinations.user_modified_category, 0) = 1 AND destinations.category = 'restricted' THEN destinations.rules_summary
+                    ELSE excluded.rules_summary
+                END,
                 folder_name=excluded.folder_name,
                 forum_topic_id=excluded.forum_topic_id,
                 forum_topic_title=excluded.forum_topic_title,
@@ -1414,6 +1471,7 @@ async def send_saved_message_as_clean_copy(
     target_peer: int,
     topic_id: Optional[int] = None,
     strip_custom_emoji: bool = False,
+    strip_links: bool = False,
     allow_media: bool = True,
     fallback_text: str = "",
 ):
@@ -1426,6 +1484,7 @@ async def send_saved_message_as_clean_copy(
     - If strip_custom_emoji=True ('Withut emji ❌' / 'No Emoji / Text Only' groups): strips all
       MessageEntityCustomEmoji / TextCustomEmoji so premium emojis automatically fall back to standard
       emojis / plain text, and sends without the 'Forwarded from' header.
+    - If strip_links=True ('No Links' groups): removes clickable URL entities and cleans http/https links.
     """
     src_msg = await client.get_messages("me", ids=int(source_msg_id))
     if not src_msg:
@@ -1458,11 +1517,15 @@ async def send_saved_message_as_clean_copy(
     entities = list(src_msg.entities or []) if raw_msg_str.strip() else []
     if strip_custom_emoji and entities:
         entities = [e for e in entities if not isinstance(e, types.MessageEntityCustomEmoji)]
+    if strip_links and entities:
+        entities = [e for e in entities if not isinstance(e, (types.MessageEntityUrl, types.MessageEntityTextUrl))]
+    if strip_links and not entities and msg_body:
+        msg_body = re.sub(r"https?://\S+|t\.me/\S+", "", msg_body).strip()
 
     # 1. If message is a RichMessage Table (e.g. SMF SHOP Table) and group allows Premium Emojis (only blocks Forward):
     #    Send as a brand-new InputRichMessage via SendMessageRequest (NOT ForwardMessagesRequest!) -> ZERO Forward tag!
     rich_msg = getattr(src_msg, "rich_message", None)
-    if not strip_custom_emoji and rich_msg and getattr(rich_msg, "blocks", None) and hasattr(types, "InputRichMessage"):
+    if not strip_custom_emoji and not strip_links and rich_msg and getattr(rich_msg, "blocks", None) and hasattr(types, "InputRichMessage"):
         try:
             in_peer = await client.get_input_entity(target_peer)
             in_photos = [
@@ -1673,6 +1736,44 @@ async def execute_campaign_round(campaign: dict):
             topic_id = int(raw_topic) if (raw_topic and int(raw_topic) > 0) else None
             topic_note = f" [Topic: #{dest.get('forum_topic_title')}]" if dest.get("forum_topic_title") else ""
             delivery_note = f"Delivered OK{topic_note}"
+
+            # 1. Pre-Send Inspection Gap: take a 2.5s–4.5s natural gap before reading group rules & state
+            await asyncio.sleep(random.uniform(2.5, 4.5))
+
+            # 2. Pre-Send Previous Post Survival Check:
+            #    If we previously sent a post in this group (last_sent_msg_id > 1) and an Admin/Moderator deleted it later,
+            #    permanently quarantine this group to Restricted (Skip) so we NEVER send here again and risk an ID limit!
+            prev_msg_id = dest.get("last_sent_msg_id")
+            if prev_msg_id and int(prev_msg_id) > 1:
+                try:
+                    prev_chk = await asyncio.wait_for(client.get_messages(target_peer, ids=int(prev_msg_id)), timeout=2.5)
+                    if prev_chk is None:
+                        q_reason = "Admin/Moderator Deleted Previous Marketing Post — Permanently Quarantined to Protect ID"
+                        conn_q = get_conn()
+                        conn_q.execute(
+                            """
+                            UPDATE destinations
+                            SET can_post = 0, category = 'restricted', auto_tags = '["restricted"]',
+                                user_modified_category = 1, restriction_reason = ?, rules_summary = ?
+                            WHERE id = ?
+                            """,
+                            (q_reason, f"⛔ {q_reason}", dest_id),
+                        )
+                        conn_q.commit()
+                        conn_q.close()
+                        log_delivery(
+                            camp_id,
+                            account_id,
+                            dest_id,
+                            dest["title"],
+                            next_round,
+                            "skipped",
+                            f"🛡️ ID Protection: Previous message (#{prev_msg_id}) was deleted by Group Admin/Moderator. Group permanently moved to Restricted (Skip) — continuing to remaining groups.",
+                        )
+                        continue
+                except Exception:
+                    pass
+
             folder_low = (dest.get("folder_name") or "").lower()
             rules_low = (dest.get("rules_summary") or "").lower()
             strip_emoji = (
@@ -1692,41 +1793,112 @@ async def execute_campaign_round(campaign: dict):
                 or "forwarding restricted" in rules_low
                 or "clean copy" in rules_low
             )
+            strip_links = (
+                not dest.get("allow_links", 1)
+                or dest_cat == "no_links"
+                or "no_links" in dest_tags
+                or "no link" in folder_low
+                or "no link" in rules_low
+                or "links disabled" in rules_low
+            )
 
-            # Live Pre-Send Policy Check: inspect live entity flags (noforwards, slowmode, banned_rights)
+            # 3. Live Pre-Send Rule Reader & Permission Check:
+            #    Inspect live entity flags, live permissions, and recent messages right before sending!
             try:
-                live_ent = await asyncio.wait_for(client.get_entity(target_peer), timeout=2.0)
-                if getattr(live_ent, "noforwards", False) and dest.get("allow_forwards", 1):
+                live_ent = await asyncio.wait_for(client.get_entity(target_peer), timeout=2.5)
+                if getattr(live_ent, "noforwards", False):
                     dest["allow_forwards"] = 0
                     is_no_forward = True
                     if "no_forward" not in dest_tags:
                         dest_tags.append("no_forward")
-                    conn_nf = get_conn()
-                    conn_nf.execute(
-                        "UPDATE destinations SET allow_forwards = 0, auto_tags = ? WHERE id = ?",
-                        (json.dumps(sorted(list(set(dest_tags)))), dest_id),
+
+                live_perms = await asyncio.wait_for(client.get_permissions(target_peer, "me"), timeout=2.0)
+                if not getattr(live_perms, "is_admin", False) and not getattr(live_perms, "is_creator", False):
+                    if getattr(live_perms, "send_messages", True) is False or getattr(live_perms, "send_plain", True) is False:
+                        conn_lp = get_conn()
+                        conn_lp.execute(
+                            "UPDATE destinations SET can_post = 0, category = 'restricted', auto_tags = '[\"restricted\"]', rules_summary = 'Sending Messages Not Allowed' WHERE id = ?",
+                            (dest_id,),
+                        )
+                        conn_lp.commit()
+                        conn_lp.close()
+                        log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "skipped", "Live Check: Sending messages is locked in this group")
+                        continue
+                    p_ban = getattr(live_perms, "banned_rights", None)
+                    if p_ban and getattr(p_ban, "embed_links", False):
+                        strip_links = True
+                    if p_ban and (getattr(p_ban, "send_media", False) or getattr(p_ban, "send_photos", False)):
+                        dest["allow_media"] = 0
+
+                # Inspect latest 8 messages in group before sending to catch live bot rules or anti-promo warnings
+                pre_msgs = await asyncio.wait_for(client.get_messages(target_peer, limit=8), timeout=2.0)
+                my_uname = (acc.get("username") or "").lower().strip("@")
+                admin_blocked_promo = False
+                for pm in (pre_msgs or []):
+                    ptxt = (getattr(pm, "message", None) or "").lower()
+                    if not ptxt:
+                        continue
+                    sender = getattr(pm, "sender", None)
+                    is_mod_msg = bool(getattr(sender, "bot", False)) or isinstance(getattr(pm, "from_id", None), types.PeerChannel)
+                    if is_mod_msg:
+                        if any(w in ptxt for w in ["no forward", "cấm forward", "chuyển tiếp"]):
+                            is_no_forward = True
+                        if any(w in ptxt for w in ["no emoji", "cấm icon", "custom emoji", "premium emoji"]):
+                            strip_emoji = True
+                        if any(w in ptxt for w in ["no link", "cấm link", "không chèn link"]):
+                            strip_links = True
+                        if any(w in ptxt for w in ["no promo", "no advertising", "no selling", "cấm quảng cáo", "cấm bán hàng"]):
+                            admin_blocked_promo = True
+                    if my_uname and f"@{my_uname}" in ptxt and any(w in ptxt for w in ["spam", "scam", "ban", "mute", "warn", "delete", "xóa", "cấm"]):
+                        admin_blocked_promo = True
+
+                if admin_blocked_promo:
+                    conn_ab = get_conn()
+                    conn_ab.execute(
+                        """
+                        UPDATE destinations
+                        SET can_post = 0, category = 'restricted', auto_tags = '["restricted"]',
+                            user_modified_category = 1, restriction_reason = 'Admin/Mod Forbids Marketing or Warned Account',
+                            rules_summary = '⛔ Auto-Restricted: Admin/Moderator forbids marketing or flagged spam'
+                        WHERE id = ?
+                        """,
+                        (dest_id,),
                     )
-                    conn_nf.commit()
-                    conn_nf.close()
+                    conn_ab.commit()
+                    conn_ab.close()
+                    log_delivery(
+                        camp_id,
+                        account_id,
+                        dest_id,
+                        dest["title"],
+                        next_round,
+                        "skipped",
+                        "🛡️ ID Protection: Pre-send scan detected Admin/Moderator anti-promo rule or warning — permanently moved to Restricted (Skip).",
+                    )
+                    continue
             except Exception:
                 pass
 
+            # 4. Convert & Send Message According to All Detected Group Rules:
             if tmpl["mode"] == "forward" and tmpl.get("source_message_id"):
-                # Check if group blocks forwards OR requires stripping premium emojis -> send as 100% Clean New Message (NO Forward)!
-                if strip_emoji or is_no_forward:
+                # Check if group blocks forwards, emojis, or links -> convert to 100% Clean New Message matching group rules!
+                if strip_emoji or is_no_forward or strip_links:
                     msg_id = await send_saved_message_as_clean_copy(
                         client,
                         int(tmpl["source_message_id"]),
                         target_peer,
                         topic_id,
                         strip_custom_emoji=strip_emoji,
+                        strip_links=strip_links,
                         allow_media=bool(dest.get("allow_media", 1)),
                         fallback_text=tmpl.get("content") or "",
                     )
+                    conv_parts = ["No-Forward Clean Copy"]
                     if strip_emoji:
-                        delivery_note = "Sent without Premium Emojis & without Forward Tag (Clean Copy)"
-                    else:
-                        delivery_note = "Sent as Clean Copy (No-Forward Rule Bypass)"
+                        conv_parts.append("Premium Emojis Converted")
+                    if strip_links:
+                        conv_parts.append("Links Stripped")
+                    delivery_note = f"Converted & Sent ({' + '.join(conv_parts)}){topic_note}"
                 else:
                     try:
                         if topic_id:
@@ -1755,6 +1927,7 @@ async def execute_campaign_round(campaign: dict):
                             target_peer,
                             topic_id,
                             strip_custom_emoji=strip_emoji,
+                            strip_links=strip_links,
                             allow_media=bool(dest.get("allow_media", 1)),
                             fallback_text=tmpl.get("content") or "",
                         )
@@ -1768,6 +1941,8 @@ async def execute_campaign_round(campaign: dict):
                         delivery_note = "Auto-Learned No-Forward -> Sent as Clean Copy"
             else:
                 final_text = parse_spintax(tmpl["content"] or "")
+                if strip_links and final_text:
+                    final_text = re.sub(r"https?://\S+|t\.me/\S+", "", final_text).strip()
                 if not final_text.strip() and tmpl.get("source_message_id"):
                     msg_id = await send_saved_message_as_clean_copy(
                         client,
@@ -1775,6 +1950,7 @@ async def execute_campaign_round(campaign: dict):
                         target_peer,
                         topic_id,
                         strip_custom_emoji=strip_emoji,
+                        strip_links=strip_links,
                         allow_media=bool(dest.get("allow_media", 1)),
                     )
                 else:
@@ -1789,6 +1965,7 @@ async def execute_campaign_round(campaign: dict):
                         entity=target_peer,
                         message=final_text,
                         parse_mode=tmpl.get("parse_mode") or "html",
+                        link_preview=False,
                         reply_to=int(topic_id) if topic_id else None,
                     )
                     msg_id = sent_msg.id
@@ -1796,17 +1973,23 @@ async def execute_campaign_round(campaign: dict):
             conn = get_conn()
             conn.execute("UPDATE campaigns SET total_sent = total_sent + 1, last_error = NULL WHERE id = ?", (camp_id,))
             conn.execute("UPDATE accounts SET sent_today = sent_today + 1 WHERE id = ?", (account_id,))
-            conn.execute("UPDATE destinations SET last_sent_at = ? WHERE id = ?", (now_iso(), dest_id))
+            conn.execute(
+                "UPDATE destinations SET last_sent_at = ?, last_sent_msg_id = ? WHERE id = ?",
+                (now_iso(), int(msg_id) if (msg_id and int(msg_id) > 1) else None, dest_id),
+            )
             conn.commit()
             conn.close()
             log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "sent", delivery_note, msg_id)
 
-            # Live Post-Send Self-Learning & Deletion/Mute Detector:
-            # Wait 3s, verify if message was deleted by a moderation bot/admin or if account got muted, and auto-update tags!
+            # 5. Live Post-Send Deep Verification & Admin/Moderator Delete Quarantine:
+            #    Wait 6.5s, check if message was deleted by an Admin/Moderator/Bot or if account got muted or warned.
+            #    If deleted/muted/flagged as spam -> IMMEDIATELY move this group to Restricted (Skip) permanently
+            #    so we NEVER send here again, while continuing safely to the remaining groups!
             try:
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(6.5)
                 was_deleted = False
                 was_muted = False
+                was_warned = False
                 bot_mute_reason = ""
                 mute_until_label = ""
 
@@ -1826,15 +2009,7 @@ async def execute_campaign_round(campaign: dict):
                             p_ban = getattr(perms_now, "banned_rights", None)
                             u_dt = getattr(p_ban, "until_date", None) if p_ban else None
                             rest_dt_obj = u_dt if (u_dt and u_dt.year < 2099) else (datetime.now(timezone.utc) + timedelta(hours=12))
-                            rest_iso = rest_dt_obj.isoformat()
                             mute_until_label = f"Until {rest_dt_obj.strftime('%H:%M UTC')}"
-                            conn_m = get_conn()
-                            conn_m.execute(
-                                "UPDATE destinations SET restriction_until = ?, restriction_reason = 'Account Temporarily Muted by Group Bot/Admin', rules_summary = 'Temporarily Muted by Group Bot/Admin' WHERE id = ?",
-                                (rest_iso, dest_id),
-                            )
-                            conn_m.commit()
-                            conn_m.close()
                 except Exception:
                     pass
 
@@ -1842,64 +2017,56 @@ async def execute_campaign_round(campaign: dict):
                 for am in (after_msgs or []):
                     if msg_id and int(msg_id) > 1 and getattr(am, "id", 0) <= int(msg_id):
                         continue
-                    sender = getattr(am, "sender", None)
-                    is_bot_or_mod = bool(getattr(sender, "bot", False)) or (getattr(am, "id", 0) != int(msg_id or 0))
-                    if not is_bot_or_mod:
-                        continue
                     raw_btxt = (getattr(am, "message", None) or "").strip()
                     btxt = raw_btxt.lower()
                     if not btxt:
                         continue
-                    learned_cat = None
                     learned_rule = None
                     if any(w in btxt for w in ["emoji", "cấm icon", "custom emoji", "sticker", "premium emoji"]):
-                        learned_cat = "text_only"
                         learned_rule = "No Premium Emojis / Stickers Allowed"
                     elif any(w in btxt for w in ["forward", "chuyển tiếp"]):
-                        learned_cat = "no_forward"
                         learned_rule = "No Forwarding Allowed"
-                    elif any(w in btxt for w in ["24h", "24 giờ", "1 bài", "1 post", "once a day", "mỗi ngày", "đạt 2/2 cảnh cáo", "spam", "flood"]):
-                        learned_cat = "24h_once"
-                        learned_rule = "1 Post / 24h Limit or Anti-Spam Filter"
-                    elif any(w in btxt for w in ["no link", "cấm link", "không chèn link", "link not allowed", "url"]):
-                        learned_cat = "no_links"
+                    elif any(w in btxt for w in ["24h", "24 giờ", "1 bài", "1 post", "once a day", "mỗi ngày", "đạt 2/2 cảnh cáo"]):
+                        learned_rule = "1 Post / 24h Limit Enforced"
+                    elif any(w in btxt for w in ["no link", "cấm link", "không chèn link", "link not allowed"]):
                         learned_rule = "Links Not Allowed in Group"
-                    elif any(w in btxt for w in ["muted", "khóa mõm", "cấm chat", "1/2 cảnh cáo", "restricted", "warn", "deleted", "xóa"]):
-                        learned_rule = f"Moderation Bot Warning ({raw_btxt[:70]})"
+                    elif any(w in btxt for w in ["spam", "no promo", "no ads", "scam", "muted", "khóa mõm", "cấm chat", "1/2 cảnh cáo", "restricted", "warn", "deleted", "xóa"]):
+                        was_warned = True
+                        learned_rule = f"Admin/Bot Spam or Mute Warning ({raw_btxt[:70]})"
 
                     if learned_rule and not bot_mute_reason:
                         bot_mute_reason = learned_rule
 
-                    if learned_cat and learned_cat != dest_cat:
-                        new_tags = sorted(list(set(dest_tags + [learned_cat])))
-                        conn_bot = get_conn()
-                        conn_bot.execute(
-                            "UPDATE destinations SET category = ?, auto_tags = ?, allow_forwards = CASE WHEN ? = 'no_forward' THEN 0 ELSE allow_forwards END, restriction_reason = ?, rules_summary = ? WHERE id = ?",
-                            (learned_cat, json.dumps(new_tags), learned_cat, f"Bot Auto-Detected: {learned_rule}", f"Bot Auto-Detected: {learned_rule}", dest_id),
-                        )
-                        conn_bot.commit()
-                        conn_bot.close()
-                        break
-
-                if was_deleted or was_muted:
+                if was_deleted or was_muted or was_warned:
                     round_strike_count += 1
                     if not bot_mute_reason:
-                        rule_hint = dest.get("rules_summary") or ""
-                        if "no link" in rule_hint.lower() or "links disabled" in rule_hint.lower() or "no_links" in dest_tags:
-                            bot_mute_reason = "Group Rule: Links / Promo Format Blocked by Admin Bot"
-                        elif "24h" in rule_hint.lower() or "24h_once" in dest_tags:
-                            bot_mute_reason = "Group Rule: 1 Post per 24h Limit Enforced by Bot"
-                        elif "emoji" in rule_hint.lower() or "text_only" in dest_tags:
-                            bot_mute_reason = "Group Rule: Premium Emojis / Media Blocked by Bot"
-                        else:
-                            bot_mute_reason = "Group Moderation Bot Auto-Filter (Anti-Spam / Keyword / Unverified Seller Rule)"
+                        bot_mute_reason = "Admin/Moderator Deleted Marketing Post or Flagged Spam (Public Chat / No-Promo Group)"
 
-                    action_lbl = "Account Muted + Msg Deleted" if (was_deleted and was_muted) else ("Account Muted" if was_muted else "Msg Auto-Deleted by Bot/Admin")
+                    action_lbl = (
+                        "Account Muted + Msg Deleted"
+                        if (was_deleted and was_muted)
+                        else ("Account Muted" if was_muted else "Msg Deleted / Flagged by Admin or Bot")
+                    )
                     if mute_until_label:
                         action_lbl = f"{action_lbl} [{mute_until_label}]"
                     why_lbl = f"{action_lbl} — Reason: {bot_mute_reason}"
                     strike_details.append(f"{dest['title']}: {why_lbl}")
+
+                    # PERMANENTLY move this group to Restricted (Skip) so the bot NEVER sends here again!
                     conn_st = get_conn()
+                    conn_st.execute(
+                        """
+                        UPDATE destinations
+                        SET can_post = 0, category = 'restricted', auto_tags = '["restricted"]',
+                            user_modified_category = 1, restriction_reason = ?, rules_summary = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            f"Quarantined: {why_lbl[:140]}",
+                            f"⛔ Auto-Restricted (Never Send Again): {why_lbl[:160]}",
+                            dest_id,
+                        ),
+                    )
                     conn_st.execute(
                         "UPDATE campaigns SET total_failed = total_failed + 1, total_sent = CASE WHEN total_sent > 0 THEN total_sent - 1 ELSE 0 END WHERE id = ?",
                         (camp_id,),
@@ -1913,7 +2080,7 @@ async def execute_campaign_round(campaign: dict):
                         dest["title"],
                         next_round,
                         "failed",
-                        f"⚠️ {why_lbl} (Strike {round_strike_count}/3)",
+                        f"🛡️ Auto-Moved to Restricted (Will Never Send Here Again): {why_lbl} (Strike {round_strike_count}/3)",
                         msg_id,
                     )
             except Exception:
