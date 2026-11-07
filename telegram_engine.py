@@ -290,10 +290,11 @@ def analyze_entity_and_rules(
     rule_text: str = "",
     folder_names: Optional[List[str]] = None,
     cannot_post_reason: str = "",
+    chat_behavior: Optional[dict] = None,
 ) -> dict:
     """
-    Analyzes a Telegram group/channel entity + Telegram Chat Folders + description/pinned rules text
-    and returns detected permissions, auto_tags, folder_name, and primary category.
+    Analyzes a Telegram group/channel entity + Telegram Chat Folders + description/pinned rules/bot warnings
+    + live seller chat behavior patterns and returns detected permissions, auto_tags, folder_name, and primary category.
     """
     can_post = 1
     restriction_until = None
@@ -304,6 +305,7 @@ def analyze_entity_and_rules(
     tags: List[str] = []
     reasons: List[str] = []
     folder_names = folder_names or []
+    chat_behavior = chat_behavior or {}
 
     admin_rights = getattr(entity, "admin_rights", None)
     is_creator = bool(getattr(entity, "creator", False))
@@ -345,6 +347,7 @@ def analyze_entity_and_rules(
 
     # Also check if title itself indicates a read-only Bot Logs / Order Logs feed where user is not admin
     ent_title_low = (getattr(entity, "title", "") or "").lower()
+    ent_uname_low = (getattr(entity, "username", "") or "").lower()
     if not is_creator and not is_admin:
         if any(kw in ent_title_low for kw in ("bot log", "bot logs", "ai log", "ai logs", "order log", "purchase log", "payment log", "stock update")):
             can_post = 0
@@ -377,7 +380,7 @@ def analyze_entity_and_rules(
     folder_no_emoji = False
     folder_24h = False
 
-    # 1. Check User's Telegram Chat Folders first (highest priority user classification!)
+    # 1. Check User's Telegram Chat Folders first
     for fn in folder_names:
         fn_low = fn.lower()
         if any(k in fn_low for k in ["emji", "emoji", "withut", "without", "text only", "no media"]):
@@ -401,10 +404,10 @@ def analyze_entity_and_rules(
             tags.append("no_links")
             reasons.append(f"Telegram Folder: {fn} (No Links)")
 
-    # 2. Parse rule text + pinned messages + moderation bot messages (English + Vietnamese + Urdu/Hindi)
+    # 2. Parse official rule text (Group Bio + Pinned Rules + Moderation Bot Messages ONLY — never regular seller ads)
     txt = (rule_text or "").lower()
 
-    # No-Forward detection from rules & bot warnings
+    # No-Forward detection from official rules, bot warnings, or seller chat behavior
     if any(
         k in txt
         for k in [
@@ -417,14 +420,21 @@ def analyze_entity_and_rules(
             "no forwarded",
             "cấm forward",
             "không forward",
+            "ko forward",
             "cấm chuyển tiếp",
             "không chuyển tiếp",
+            "ko chuyển tiếp",
             "tin nhắn chuyển tiếp",
+            "hạn chế chuyển tiếp",
         ]
     ):
         allow_forwards = 0
         if not any("No Forwarding" in r for r in reasons):
-            reasons.append("Bot/Group Rule: No Forwarding")
+            reasons.append("Bot/Group Rule: No Forwarding (Auto Clean Copy)")
+    elif chat_behavior.get("inferred_no_forward"):
+        allow_forwards = 0
+        if not any("Forward" in r for r in reasons):
+            reasons.append("Seller Chat & Bot Pattern: 0 Forwarded Posts Allowed (Auto Clean Copy)")
 
     # No-Link detection from rules & bot warnings
     if any(
@@ -446,36 +456,49 @@ def analyze_entity_and_rules(
         if not any("No Links" in r for r in reasons):
             reasons.append("Bot/Group Rule: No Links")
 
-    # 24h / Daily post limit detection from rules & bot warnings (strictly daily post limit phrases, not 'BH 24h' warranty or 'muted 24h')
-    if slowmode_seconds >= 3600 or any(
-        k in txt
-        for k in [
-            "1 post per day",
-            "1 post/day",
-            "1 post / day",
-            "1 post per 24h",
-            "1 post / 24h",
-            "1 post in 24h",
-            "once a day",
-            "once per day",
-            "once per 24h",
-            "one post per day",
-            "only 1 post per day",
-            "1 bài/ngày",
-            "1 bài / ngày",
-            "1 bài/24h",
-            "1 bài / 24h",
-            "1 lần/ngày",
-            "mỗi ngày 1 bài",
-            "giới hạn 1 bài",
-        ]
+    # 24h / Daily post limit detection from official rules, moderation bots (e.g. vocvn_bot / @nghienvoc), & slowmode
+    if (
+        slowmode_seconds >= 3600
+        or ent_uname_low == "nghienvoc"
+        or "nghiện vọc" in ent_title_low
+        or chat_behavior.get("bot_enforces_24h")
+        or any(
+            k in txt
+            for k in [
+                "24h",
+                "24 giờ",
+                "24 hour",
+                "24 hours",
+                "1 post per day",
+                "1 post/day",
+                "1 post / day",
+                "1 post per 24h",
+                "1 post / 24h",
+                "1 post in 24h",
+                "once a day",
+                "once per day",
+                "once per 24h",
+                "one post per day",
+                "only 1 post",
+                "1 bài/ngày",
+                "1 bài / ngày",
+                "1 bài/24h",
+                "1 bài / 24h",
+                "1 lần/ngày",
+                "mỗi ngày 1",
+                "giới hạn bài đăng",
+                "giới hạn 1 bài",
+                "đạt 2/2 cảnh cáo",
+                "vocvn_bot",
+            ]
+        )
     ):
         is_24h = True
         if not any("24h" in r for r in reasons):
-            reasons.append("Bot/Group Rule: 1 Post / 24h")
+            reasons.append("Bot/Group Rule: 1 Post / 24h Limit")
 
     # No Emoji / No Custom Emoji / Sticker restriction detection from rules & bot warnings
-    if any(
+    if chat_behavior.get("inferred_no_emoji") or any(
         k in txt
         for k in [
             "no emoji",
@@ -524,20 +547,15 @@ def analyze_entity_and_rules(
         if not tags or set(tags).issubset({"premium_emoji_ok", "forward_ok"}):
             tags.append("standard")
 
-    # Determine primary distribution category (User's explicit Telegram Folders take highest priority!)
+    # Determine primary distribution category:
+    # 24h_once (1 post/day rate limit) has highest priority for scheduling, while keeping allow_forwards=0 & no_forward tag active!
     if not can_post:
         category = "restricted"
-    elif folder_no_forward:
-        category = "no_forward"
-    elif folder_no_emoji:
-        category = "text_only"
-    elif folder_24h:
+    elif is_24h or folder_24h:
         category = "24h_once"
-    elif not allow_forwards:
+    elif folder_no_forward or not allow_forwards:
         category = "no_forward"
-    elif is_24h:
-        category = "24h_once"
-    elif is_no_emoji or not allow_media or "text_only" in tags:
+    elif folder_no_emoji or is_no_emoji or not allow_media or "text_only" in tags:
         category = "text_only"
     elif not allow_links:
         category = "no_links"
@@ -715,21 +733,21 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     dialogs = await client.get_dialogs(limit=None)
     group_dialogs = [d for d in dialogs if (d.is_group or d.is_channel) and int(d.id) not in deleted_main_ids]
 
-    # 2. Deep-scan group description, pinned rules, recent moderation bot messages, AND active Forum Selling/General topic concurrently
+    # 2. Deep-scan group description, pinned rules, recent moderation bot messages, seller chat behavior, AND active Forum Selling/General topic concurrently
     extra_rules: Dict[int, str] = {}
     forum_topic_map: Dict[int, tuple] = {}
     cannot_post_map: Dict[int, str] = {}
+    behavior_map: Dict[int, dict] = {}
     sem = asyncio.Semaphore(8)
-    rule_indicators = (
-        "rule", "nội quy", "quy định", "warning", "cảnh cáo", "cảnh báo",
-        "muted", "banned", "khóa mõm", "cấm", "không được", "not allowed",
-        "prohibited", "strictly", "no forward", "no emoji", "no link",
-        "24h", "1 bài", "1 post", "🚫", "⚠️", "❌"
-    )
 
     async def _scan_one(d):
         entity = d.entity
         text_parts = []
+        behavior = {
+            "inferred_no_forward": False,
+            "inferred_no_emoji": False,
+            "bot_enforces_24h": False,
+        }
         is_creator_or_admin = bool(getattr(entity, "creator", False)) or bool(getattr(entity, "admin_rights", None))
         async with sem:
             if getattr(entity, "forum", False):
@@ -781,10 +799,10 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 except Exception:
                     pass
 
-                # B) Up to 3 Pinned Rules Messages
+                # B) Up to 5 Pinned Rules Messages
                 try:
                     pinned = await asyncio.wait_for(
-                        client.get_messages(entity, filter=types.InputMessagesFilterPinned(), limit=3),
+                        client.get_messages(entity, filter=types.InputMessagesFilterPinned(), limit=5),
                         timeout=2.5,
                     )
                     for pm in (pinned or []):
@@ -793,19 +811,31 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 except Exception:
                     pass
 
-                # C) Recent 20 Group Messages — Extract Moderation Bot warnings & Bot-Only Logs feeds
+                # C) Recent 35 Group Messages — Analyze Moderation Bots + Other Sellers' Chat Patterns
                 try:
-                    recent_msgs = await asyncio.wait_for(
-                        client.get_messages(entity, limit=20),
-                        timeout=2.5,
-                    )
+                    target_topic = forum_topic_map.get(d.id, (None,))[0] if getattr(entity, "forum", False) else None
+                    if target_topic and target_topic > 1:
+                        recent_msgs = await asyncio.wait_for(
+                            client.get_messages(entity, reply_to=target_topic, limit=35),
+                            timeout=2.5,
+                        )
+                    else:
+                        recent_msgs = await asyncio.wait_for(
+                            client.get_messages(entity, limit=35),
+                            timeout=2.5,
+                        )
                     real_msgs = [rm for rm in (recent_msgs or []) if getattr(rm, "message", None) or getattr(rm, "media", None)]
                     bot_or_admin_count = 0
+                    seller_msg_count = 0
+                    seller_fwd_count = 0
+                    has_strict_mod_bot = False
+
                     for rm in real_msgs:
                         msg_txt = getattr(rm, "message", None) or ""
                         sender = getattr(rm, "sender", None)
                         is_bot = bool(getattr(sender, "bot", False))
                         sender_uname = (getattr(sender, "username", "") or "").lower()
+                        sender_fname = (getattr(sender, "first_name", "") or "").lower()
                         from_peer = getattr(rm, "from_id", None)
                         is_anon_admin = isinstance(from_peer, types.PeerChannel) or bool(getattr(rm, "post", False))
 
@@ -813,13 +843,32 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                             bot_or_admin_count += 1
                             if msg_txt:
                                 text_parts.append(msg_txt)
+                            low_bot_msg = msg_txt.lower()
+                            if "vocvn_bot" in sender_uname or "v o c v n" in sender_fname or "đạt 2/2 cảnh cáo" in low_bot_msg or "1/2 cảnh cáo" in low_bot_msg:
+                                behavior["bot_enforces_24h"] = True
+                                has_strict_mod_bot = True
+                            if any(b in sender_uname for b in ("rose", "grouphelp", "shieldy", "combot", "vocvn", "clean")):
+                                has_strict_mod_bot = True
+                            if any(w in low_bot_msg for w in ("forward", "chuyển tiếp")):
+                                behavior["inferred_no_forward"] = True
+                            if any(w in low_bot_msg for w in ("1 bài/ngày", "1 bài / ngày", "24h", "24 giờ", "1 post per day", "once a day", "quá số lần")):
+                                behavior["bot_enforces_24h"] = True
+                        else:
+                            seller_msg_count += 1
+                            if getattr(rm, "fwd_from", None) is not None:
+                                seller_fwd_count += 1
 
                     # If a group has >= 4 recent messages and 100% of them are from Bots or anonymous channel admins (e.g. VEXORIX BOT LOGS, GGSoma Group), normal users cannot post
                     if not is_creator_or_admin and len(real_msgs) >= 4 and bot_or_admin_count == len(real_msgs):
                         cannot_post_map.setdefault(d.id, "Restricted: Bot Logs / Admin-Only Group")
+
+                    # If there are >= 10 seller ads and 0 of them are forwarded while a strict moderation bot is active in the group, sellers are avoiding forwards -> Clean Copy
+                    if seller_msg_count >= 10 and seller_fwd_count == 0 and has_strict_mod_bot:
+                        behavior["inferred_no_forward"] = True
                 except Exception:
                     pass
 
+        behavior_map[d.id] = behavior
         if text_parts:
             extra_rules[d.id] = " ".join(text_parts)
 
@@ -853,7 +902,13 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
         folders = list(dict.fromkeys((folder_map.get(d.id) or []) + (folder_map.get(raw_ent_id) or [])))
 
         rule_text = title + " " + extra_rules.get(d.id, "")
-        analysis = analyze_entity_and_rules(entity, rule_text, folders, cannot_post_reason=cannot_post_map.get(d.id, ""))
+        analysis = analyze_entity_and_rules(
+            entity,
+            rule_text,
+            folders,
+            cannot_post_reason=cannot_post_map.get(d.id, ""),
+            chat_behavior=behavior_map.get(d.id),
+        )
 
         forum_topic_id = None
         forum_topic_title = ""

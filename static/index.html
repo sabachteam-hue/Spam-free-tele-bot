@@ -1232,11 +1232,14 @@
     }
 
     function renderGroups() {
-      // Update category counts
+      // Update category counts so top cards match the exact filter results (including multi-tag groups like 24h + No-Forward)
       const counts = { all: STATE.destinations.length, standard: 0, no_forward: 0, '24h_once': 0, text_only: 0, restricted: 0 };
       STATE.destinations.forEach(d => {
         const c = d.category || (d.can_post ? 'standard' : 'restricted');
-        if (counts[c] !== undefined) counts[c]++;
+        const tags = d.auto_tags || [];
+        ['standard', 'no_forward', '24h_once', 'text_only', 'restricted'].forEach(k => {
+          if (c === k || tags.includes(k)) counts[k]++;
+        });
       });
       Object.keys(counts).forEach(k => {
         const el = document.getElementById(`cat-count-${k}`);
