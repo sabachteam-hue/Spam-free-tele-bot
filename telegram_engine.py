@@ -497,32 +497,39 @@ def analyze_entity_and_rules(
         if not any("24h" in r for r in reasons):
             reasons.append("Bot/Group Rule: 1 Post / 24h Limit")
 
-    # No Emoji / No Custom Emoji / Sticker restriction detection from rules & bot warnings
-    if chat_behavior.get("inferred_no_emoji") or any(
-        k in txt
-        for k in [
-            "no emoji",
-            "no custom emoji",
-            "no premium emoji",
-            "emoji not allowed",
-            "emojis not allowed",
-            "without emoji",
-            "withut emji",
-            "no sticker",
-            "text only",
-            "cấm emoji",
-            "không dùng emoji",
-            "emoji premium",
-            "cấm icon",
-            "không dùng icon",
-        ]
+    # No Emoji / No Custom Emoji restriction detection:
+    # IMPORTANT: Telegram's send_media/send_photos permission (allow_media=0) ONLY blocks image/video files;
+    # Telegram Premium Emojis (MessageEntityCustomEmoji) are text entities and ARE allowed even when Media is disabled!
+    # Only mark is_no_emoji if in user's 'Withut emji' folder, or explicit rule/bot forbids emojis (and sellers aren't using them).
+    if folder_no_emoji or (
+        not chat_behavior.get("sellers_use_custom_emoji")
+        and (
+            chat_behavior.get("inferred_no_emoji")
+            or any(
+                k in txt
+                for k in [
+                    "no emoji",
+                    "no custom emoji",
+                    "no premium emoji",
+                    "emoji not allowed",
+                    "emojis not allowed",
+                    "without emoji",
+                    "withut emji",
+                    "cấm emoji",
+                    "không dùng emoji",
+                    "emoji premium",
+                    "cấm icon",
+                    "không dùng icon",
+                ]
+            )
+        )
     ):
         is_no_emoji = True
         tags.append("text_only")
         tags.append("no_emoji")
         if not any("No Premium Emoji" in r for r in reasons):
             reasons.append("Bot/Group Rule: No Premium Emoji / Text Only")
-    elif allow_media and not is_no_emoji:
+    else:
         tags.append("premium_emoji_ok")
 
     if not can_post:
@@ -541,25 +548,27 @@ def analyze_entity_and_rules(
         if not allow_links:
             tags.append("no_links")
 
-        if not allow_media or is_no_emoji:
+        if is_no_emoji:
             tags.append("text_only")
 
-        if not tags or set(tags).issubset({"premium_emoji_ok", "forward_ok"}):
+        if not is_24h and allow_forwards and not is_no_emoji:
             tags.append("standard")
 
     # Determine primary distribution category:
-    # 24h_once (1 post/day rate limit) has highest priority for scheduling, while keeping allow_forwards=0 & no_forward tag active!
+    # 1. Restricted (Cannot Post)
+    # 2. 24h Limit (1 Post/Day) — e.g. @nghienvoc (also preserves allow_forwards=0 if in Dnt forwrd folder)
+    # 3. No Emoji / Text Only — e.g. user's 'Withut emji ❌' folder (GC MMO CHAT, GC MMO MARKET) or explicit no-emoji rule
+    # 4. No-Forward (Clean Copy) — e.g. user's 'Dnt forwrd ❌' folder or noforwards group protection
+    # 5. Standard (Forward OK + Premium Emoji OK) — includes groups like Smart Sellers, Illuminati's Escrower, Trust Selling!
     if not can_post:
         category = "restricted"
     elif is_24h or folder_24h:
         category = "24h_once"
+    elif folder_no_emoji or is_no_emoji:
+        category = "text_only"
     elif folder_no_forward or not allow_forwards:
         category = "no_forward"
-    elif folder_no_emoji or is_no_emoji or not allow_media or "text_only" in tags:
-        category = "text_only"
-    elif not allow_links:
-        category = "no_links"
-    elif slowmode_seconds > 0:
+    elif slowmode_seconds >= 300:
         category = "slowmode"
     else:
         category = "standard"
@@ -567,11 +576,9 @@ def analyze_entity_and_rules(
     if slowmode_seconds > 0:
         reasons.append(f"Slowmode: {slowmode_seconds}s")
     if not allow_links and not any("Links" in r for r in reasons):
-        reasons.append("Telegram Permission: Links Disabled")
-    if not allow_media:
-        reasons.append("Telegram Permission: Media Disabled")
+        reasons.append("Note: Links Disabled (Text & Premium Emojis OK)")
     if not allow_forwards and not any("Forward" in r for r in reasons):
-        reasons.append("Group Protection: Forwarding Restricted")
+        reasons.append("Group Protection: Forwarding Restricted (Auto Clean Copy)")
 
     # Pick display folder badge (prefer specific custom folders over generic "Groups")
     specific_folders = [f for f in folder_names if f.lower() not in ("groups", "channels", "all", "bots")]
@@ -747,6 +754,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
             "inferred_no_forward": False,
             "inferred_no_emoji": False,
             "bot_enforces_24h": False,
+            "sellers_use_custom_emoji": False,
         }
         is_creator_or_admin = bool(getattr(entity, "creator", False)) or bool(getattr(entity, "admin_rights", None))
         async with sem:
@@ -857,6 +865,10 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                             seller_msg_count += 1
                             if getattr(rm, "fwd_from", None) is not None:
                                 seller_fwd_count += 1
+                            for ent in getattr(rm, "entities", None) or []:
+                                if isinstance(ent, types.MessageEntityCustomEmoji):
+                                    behavior["sellers_use_custom_emoji"] = True
+                                    break
 
                     # If a group has >= 4 recent messages and 100% of them are from Bots or anonymous channel admins (e.g. VEXORIX BOT LOGS, GGSoma Group), normal users cannot post
                     if not is_creator_or_admin and len(real_msgs) >= 4 and bot_or_admin_count == len(real_msgs):
