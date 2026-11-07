@@ -285,7 +285,12 @@ async def fetch_telegram_folder_map(client: TelegramClient) -> Dict[int, List[st
     return folder_map
 
 
-def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional[List[str]] = None) -> dict:
+def analyze_entity_and_rules(
+    entity,
+    rule_text: str = "",
+    folder_names: Optional[List[str]] = None,
+    cannot_post_reason: str = "",
+) -> dict:
     """
     Analyzes a Telegram group/channel entity + Telegram Chat Folders + description/pinned rules text
     and returns detected permissions, auto_tags, folder_name, and primary category.
@@ -300,10 +305,18 @@ def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional
     reasons: List[str] = []
     folder_names = folder_names or []
 
-    if getattr(entity, "broadcast", False) and not getattr(entity, "creator", False):
-        admin_rights = getattr(entity, "admin_rights", None)
+    admin_rights = getattr(entity, "admin_rights", None)
+    is_creator = bool(getattr(entity, "creator", False))
+    is_admin = bool(admin_rights)
+
+    if getattr(entity, "left", False) or getattr(entity, "kicked", False):
+        can_post = 0
+        reasons.append("Not a Member / Left Group")
+
+    if getattr(entity, "broadcast", False) and not is_creator:
         if not admin_rights or not getattr(admin_rights, "post_messages", False):
             can_post = 0
+            reasons.append("Broadcast Channel (Admin Only)")
 
     banned_rights = getattr(entity, "banned_rights", None)
     default_banned = getattr(entity, "default_banned_rights", None)
@@ -311,9 +324,12 @@ def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional
     for rights_obj in [banned_rights, default_banned]:
         if not rights_obj:
             continue
-        if getattr(rights_obj, "send_messages", False):
-            if not getattr(entity, "creator", False) and not getattr(entity, "admin_rights", None):
+        # Modern Telegram API splits text permission into send_plain alongside legacy send_messages
+        if getattr(rights_obj, "send_messages", False) or getattr(rights_obj, "send_plain", False) or getattr(rights_obj, "view_messages", False):
+            if not is_creator and not is_admin:
                 can_post = 0
+                if "Sending Messages Not Allowed" not in " ".join(reasons):
+                    reasons.append("Telegram Permission: Sending Messages Not Allowed")
                 until_date = getattr(rights_obj, "until_date", None)
                 if until_date and until_date.year < 2099:
                     restriction_until = until_date.isoformat()
@@ -322,8 +338,38 @@ def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional
         if getattr(rights_obj, "send_media", False) or getattr(rights_obj, "send_photos", False):
             allow_media = 0
 
+    if cannot_post_reason and not is_creator and not is_admin:
+        can_post = 0
+        if cannot_post_reason not in reasons:
+            reasons.append(cannot_post_reason)
+
+    # Also check if title itself indicates a read-only Bot Logs / Order Logs feed where user is not admin
+    ent_title_low = (getattr(entity, "title", "") or "").lower()
+    if not is_creator and not is_admin:
+        if any(kw in ent_title_low for kw in ("bot log", "bot logs", "ai log", "ai logs", "order log", "purchase log", "payment log", "stock update")):
+            can_post = 0
+            if not any("Bot Logs" in r for r in reasons):
+                reasons.append("Restricted: Read-Only Bot Logs / Feed Group")
+
     if getattr(entity, "noforwards", False):
         allow_forwards = 0
+
+    # If user cannot post at all in this group/channel, immediately return restricted tag & category
+    if not can_post:
+        specific_folders = [f for f in folder_names if f.lower() not in ("groups", "channels", "all", "bots")]
+        display_folder = ", ".join(specific_folders) if specific_folders else (", ".join(folder_names) if folder_names else "")
+        return {
+            "can_post": 0,
+            "restriction_until": restriction_until,
+            "allow_forwards": 0,
+            "allow_links": 0,
+            "allow_media": 0,
+            "slowmode_seconds": slowmode_seconds,
+            "auto_tags": json.dumps(["restricted"]),
+            "category": "restricted",
+            "folder_name": display_folder,
+            "rules_summary": " · ".join(reasons) if reasons else "Sending messages is not allowed in this group",
+        }
 
     is_24h = False
     is_no_emoji = False
@@ -658,6 +704,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     # 2. Deep-scan group description, pinned rules, recent moderation bot messages, AND active Forum Selling/General topic concurrently
     extra_rules: Dict[int, str] = {}
     forum_topic_map: Dict[int, tuple] = {}
+    cannot_post_map: Dict[int, str] = {}
     sem = asyncio.Semaphore(8)
     rule_indicators = (
         "rule", "nội quy", "quy định", "warning", "cảnh cáo", "cảnh báo",
@@ -669,6 +716,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     async def _scan_one(d):
         entity = d.entity
         text_parts = []
+        is_creator_or_admin = bool(getattr(entity, "creator", False)) or bool(getattr(entity, "admin_rights", None))
         async with sem:
             if getattr(entity, "forum", False):
                 try:
@@ -676,8 +724,23 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 except Exception:
                     forum_topic_map[d.id] = (1, "General", True)
 
+            # Live participant permission check (catches personal mutes & modern send_plain group locks)
+            if not is_creator_or_admin:
+                try:
+                    perms = await asyncio.wait_for(client.get_permissions(entity, "me"), timeout=2.0)
+                    if getattr(perms, "is_admin", False) or getattr(perms, "is_creator", False):
+                        is_creator_or_admin = True
+                    else:
+                        if getattr(perms, "send_messages", True) is False or getattr(perms, "send_plain", True) is False:
+                            cannot_post_map[d.id] = "Telegram Permission: Sending Messages Not Allowed"
+                        p_banned = getattr(perms, "banned_rights", None)
+                        if p_banned and (getattr(p_banned, "send_messages", False) or getattr(p_banned, "send_plain", False)):
+                            cannot_post_map[d.id] = "Telegram Permission: Sending Messages Not Allowed"
+                except Exception:
+                    pass
+
             if deep_scan:
-                # A) Group Description / Bio
+                # A) Group Description / Bio + Full Chat Default Banned Rights
                 try:
                     if isinstance(entity, types.Channel):
                         full = await asyncio.wait_for(
@@ -687,6 +750,12 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                         about = getattr(full.full_chat, "about", "") or ""
                         if about:
                             text_parts.append(about)
+                        for ch_obj in getattr(full, "chats", []) or []:
+                            for r_attr in ("banned_rights", "default_banned_rights"):
+                                r_obj = getattr(ch_obj, r_attr, None)
+                                if r_obj and (getattr(r_obj, "send_messages", False) or getattr(r_obj, "send_plain", False)):
+                                    if not is_creator_or_admin:
+                                        cannot_post_map[d.id] = "Telegram Permission: Sending Messages Not Allowed"
                     elif isinstance(entity, types.Chat):
                         full = await asyncio.wait_for(
                             client(functions.messages.GetFullChatRequest(chat_id=entity.id)),
@@ -710,21 +779,36 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 except Exception:
                     pass
 
-                # C) Recent 20 Group Messages — Extract Moderation Bot warnings (Rose, GroupHelp, vocvn_bot, etc.) & Admin Rules
+                # C) Recent 20 Group Messages — Extract Moderation Bot warnings, Bot-Only Logs feeds & Chat Lock notices
                 try:
                     recent_msgs = await asyncio.wait_for(
                         client.get_messages(entity, limit=20),
                         timeout=2.5,
                     )
-                    for rm in (recent_msgs or []):
+                    real_msgs = [rm for rm in (recent_msgs or []) if getattr(rm, "message", None) or getattr(rm, "media", None)]
+                    bot_or_admin_count = 0
+                    for idx, rm in enumerate(real_msgs):
                         msg_txt = getattr(rm, "message", None) or ""
-                        if not msg_txt:
-                            continue
                         sender = getattr(rm, "sender", None)
                         is_bot = bool(getattr(sender, "bot", False))
                         sender_uname = (getattr(sender, "username", "") or "").lower()
-                        if is_bot or sender_uname.endswith("bot") or any(ind in msg_txt.lower() for ind in rule_indicators):
+                        from_peer = getattr(rm, "from_id", None)
+                        is_anon_admin = isinstance(from_peer, types.PeerChannel) or bool(getattr(rm, "post", False))
+
+                        if is_bot or sender_uname.endswith("bot") or is_anon_admin:
+                            bot_or_admin_count += 1
+
+                        if idx < 2 and msg_txt and not is_creator_or_admin:
+                            low_latest = msg_txt.lower()
+                            if any(lk in low_latest for lk in ("chat access restricted", "sending messages is not allowed", "group is currently locked", "chat is locked")):
+                                cannot_post_map[d.id] = "Restricted: Chat Access Locked by Bot/Admin"
+
+                        if msg_txt and (is_bot or sender_uname.endswith("bot") or any(ind in msg_txt.lower() for ind in rule_indicators)):
                             text_parts.append(msg_txt)
+
+                    # If a group has >= 4 recent messages and 100% of them are from Bots or anonymous channel admins (e.g. VEXORIX BOT LOGS, Vorten Ai Logs), normal users cannot post
+                    if not is_creator_or_admin and len(real_msgs) >= 4 and bot_or_admin_count == len(real_msgs):
+                        cannot_post_map.setdefault(d.id, "Restricted: Bot Logs / Admin-Only Group")
                 except Exception:
                     pass
 
@@ -761,16 +845,18 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
         folders = list(dict.fromkeys((folder_map.get(d.id) or []) + (folder_map.get(raw_ent_id) or [])))
 
         rule_text = title + " " + extra_rules.get(d.id, "")
-        analysis = analyze_entity_and_rules(entity, rule_text, folders)
+        analysis = analyze_entity_and_rules(entity, rule_text, folders, cannot_post_reason=cannot_post_map.get(d.id, ""))
 
         forum_topic_id = None
         forum_topic_title = ""
         if is_forum:
             ft_id, ft_title, ft_open = forum_topic_map.get(d.id, (1, "General", True))
-            if not ft_open:
+            if not ft_open or not analysis["can_post"]:
                 analysis["can_post"] = 0
                 analysis["category"] = "restricted"
-                analysis["rules_summary"] = "All Forum Topics Closed"
+                analysis["auto_tags"] = json.dumps(["restricted"])
+                if not ft_open:
+                    analysis["rules_summary"] = "All Forum Topics Closed"
             else:
                 forum_topic_id = ft_id
                 forum_topic_title = ft_title
@@ -793,7 +879,11 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 slowmode_seconds=excluded.slowmode_seconds,
                 participants_count=excluded.participants_count,
                 auto_tags=excluded.auto_tags,
-                category=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.category ELSE excluded.category END,
+                category=CASE
+                    WHEN excluded.can_post = 0 THEN 'restricted'
+                    WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.category
+                    ELSE excluded.category
+                END,
                 allow_forwards=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.allow_forwards ELSE excluded.allow_forwards END,
                 allow_links=excluded.allow_links,
                 allow_media=excluded.allow_media,
