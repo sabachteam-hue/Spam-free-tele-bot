@@ -240,10 +240,32 @@
         </div>
 
         <!-- Filter & Deep Auto-Scan Bar -->
-        <div class="bg-white p-4 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-          <div class="flex items-center gap-3 flex-wrap">
-            <input id="group-search" oninput="renderGroups()" type="text" placeholder="Search groups, @username, or rules..." class="h-10 px-3.5 rounded-xl border border-slate-200 text-xs font-semibold outline-none focus:border-[#1a2b88] w-64" />
-            <select id="group-filter-cat" onchange="renderGroups()" class="h-10 px-3 rounded-xl border border-slate-200 text-xs font-semibold outline-none">
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 space-y-3 shadow-sm">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <div class="relative flex-1 min-w-[280px]">
+              <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+              <input
+                id="group-search"
+                oninput="renderGroups()"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();renderGroups();}"
+                type="text"
+                placeholder="Search any option: group name, @username, folder (Methods, Grp2), tag, rule, category, status..."
+                class="w-full h-10 pl-10 pr-24 rounded-xl border-2 border-slate-200 bg-slate-50/50 focus:bg-white text-xs font-bold text-slate-800 outline-none focus:border-[#1a2b88] transition"
+              />
+              <button
+                id="group-search-clear"
+                type="button"
+                onclick="clearGroupSearch()"
+                class="hidden absolute right-16 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded-md bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-extrabold"
+              >✕ Clear</button>
+              <button
+                type="button"
+                onclick="renderGroups()"
+                class="absolute right-1.5 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-lg bg-[#1a2b88] hover:bg-blue-900 text-white text-[11px] font-bold transition"
+              >Search</button>
+            </div>
+
+            <select id="group-filter-cat" onchange="renderGroups()" class="h-10 px-3 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 outline-none focus:border-[#1a2b88]">
               <option value="all">All Distribution Categories</option>
               <option value="standard">Standard (Forward & Premium Emoji OK)</option>
               <option value="no_forward">No-Forward (Auto Clean-Copy Mode)</option>
@@ -254,23 +276,32 @@
               <option value="restricted">Restricted (Cannot Post)</option>
               <option value="disabled">Disabled Groups Only</option>
             </select>
+
+            <select id="group-filter-folder" onchange="renderGroups()" class="h-10 px-3 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 outline-none focus:border-[#1a2b88]">
+              <option value="all">All Folders & Types</option>
+            </select>
           </div>
-          <div class="flex items-center gap-2.5 flex-wrap">
-            <span id="group-count-badge" class="text-xs font-bold text-slate-500">0 groups shown</span>
-            <div id="bulk-group-actions" class="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
-              <span id="bulk-selected-count" class="px-2 text-[11px] font-extrabold text-[#1a2b88]">0 selected</span>
-              <button onclick="runBulkGroupAction('enable')" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition">Enable Selected</button>
-              <button onclick="runBulkGroupAction('disable')" class="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold transition">Disable Selected</button>
-              <button onclick="runBulkGroupAction('delete')" class="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition">Delete Selected</button>
+
+          <div class="flex items-center justify-between gap-2.5 flex-wrap pt-1 border-t border-slate-100">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span id="group-count-badge" class="text-xs font-extrabold text-slate-700">0 groups shown</span>
+              <div id="bulk-group-actions" class="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <span id="bulk-selected-count" class="px-2 text-[11px] font-extrabold text-[#1a2b88]">0 selected</span>
+                <button onclick="runBulkGroupAction('enable')" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition">Enable Selected</button>
+                <button onclick="runBulkGroupAction('disable')" class="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold transition">Disable Selected</button>
+                <button onclick="runBulkGroupAction('delete')" class="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition">Delete Selected</button>
+              </div>
             </div>
-            <button onclick="removeAllRestrictedGroups()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition">
-              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-              <span>Remove Restricted</span>
-            </button>
-            <button onclick="runDeepAutoScan(this)" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white text-xs font-bold shadow transition">
-              <i data-lucide="radar" class="w-4 h-4"></i>
-              <span>Auto-Scan Group Rules & Assign Tags</span>
-            </button>
+            <div class="flex items-center gap-2 flex-wrap">
+              <button onclick="removeAllRestrictedGroups()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                <span>Remove Restricted</span>
+              </button>
+              <button onclick="runDeepAutoScan(this)" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white text-xs font-bold shadow transition">
+                <i data-lucide="radar" class="w-4 h-4"></i>
+                <span>Auto-Scan Group Rules & Assign Tags</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1329,7 +1360,89 @@
       }).join(' ');
     }
 
+    function clearGroupSearch() {
+      const inp = document.getElementById('group-search');
+      if (inp) inp.value = '';
+      renderGroups();
+    }
+
+    function buildDestinationSearchText(d) {
+      const isEnabled = d.is_enabled !== 0;
+      const cat = d.category || (d.can_post ? 'standard' : 'restricted');
+      const catLabel = (TAG_LABELS[cat] && TAG_LABELS[cat].label) || cat;
+      const tags = d.auto_tags || [];
+      const tagLabels = tags.map(t => (TAG_LABELS[t] && TAG_LABELS[t].label) || t).join(' ');
+      const statusWords = [
+        isEnabled ? 'enabled active' : 'disabled paused',
+        d.can_post ? 'can post writable allowed' : 'restricted cannot post skip',
+        d.slowmode_seconds ? `slowmode ${d.slowmode_seconds}s` : 'none',
+      ].join(' ');
+      return [
+        d.parent_title || '',
+        d.title || '',
+        d.username || '',
+        d.username ? `@${d.username}` : '',
+        d.forum_topic_title || '',
+        d.forum_topic_title ? `#${d.forum_topic_title}` : '',
+        d.folder_name || '',
+        d.rules_summary || '',
+        d.restriction_reason || '',
+        d.kind || '',
+        d.account_name || '',
+        d.telegram_id || '',
+        cat,
+        catLabel,
+        tags.join(' '),
+        tagLabels,
+        statusWords
+      ].join(' ').toLowerCase();
+    }
+
+    function matchDestinationSearch(d, rawQuery) {
+      const q = (rawQuery || '').trim().toLowerCase();
+      if (!q) return true;
+      const haystack = buildDestinationSearchText(d);
+      const terms = q.split(/\s+/).filter(Boolean);
+      return terms.every(term => {
+        const cleanTerm = term.startsWith('@') ? term.slice(1) : term;
+        return haystack.includes(term) || (cleanTerm && haystack.includes(cleanTerm));
+      });
+    }
+
+    function updateFolderFilterDropdown() {
+      const sel = document.getElementById('group-filter-folder');
+      if (!sel) return;
+      const currentVal = sel.value || 'all';
+      const folderSet = new Set();
+      STATE.destinations.forEach(d => {
+        (d.folder_name || '').split(',').map(s => s.trim()).filter(Boolean).forEach(f => folderSet.add(f));
+      });
+      const folders = Array.from(folderSet).sort();
+      let html = `<option value="all">All Folders & Types</option>`;
+      if (folders.length) {
+        html += `<optgroup label="Telegram Folders">` +
+          folders.map(f => `<option value="folder:${f}">📁 Folder: ${f}</option>`).join('') +
+          `</optgroup>`;
+      }
+      html += `<optgroup label="Chat Type & Status">
+        <option value="kind:group">👥 Only Groups</option>
+        <option value="kind:forum">💬 Only Forum Sub-Chats</option>
+        <option value="kind:channel">📢 Only Channels</option>
+        <option value="status:writable">✅ Only Writable (Can Post)</option>
+        <option value="status:enabled">🟢 Only Enabled</option>
+        <option value="status:disabled">🟡 Only Disabled</option>
+      </optgroup>`;
+      sel.innerHTML = html;
+      if ([...sel.options].some(o => o.value === currentVal)) {
+        sel.value = currentVal;
+      } else {
+        sel.value = 'all';
+      }
+    }
+
     function renderGroups() {
+      updateFolderFilterDropdown();
+
       // Update category counts so top cards match the exact filter results (including multi-tag groups like 24h + No-Forward)
       const counts = { all: STATE.destinations.length, standard: 0, no_forward: 0, '24h_once': 0, text_only: 0, restricted: 0 };
       STATE.destinations.forEach(d => {
@@ -1344,23 +1457,53 @@
         if (el) el.innerText = counts[k];
       });
 
-      const q = (document.getElementById('group-search')?.value || '').toLowerCase();
-      const catFilter = document.getElementById('group-filter-cat')?.value || 'all';
+      const rawQ = document.getElementById('group-search')?.value || '';
+      const q = rawQ.trim().toLowerCase();
+      const clearBtn = document.getElementById('group-search-clear');
+      if (clearBtn) clearBtn.classList.toggle('hidden', !q);
 
-      const filtered = STATE.destinations.filter(d => {
+      const catFilter = document.getElementById('group-filter-cat')?.value || 'all';
+      const folderFilter = document.getElementById('group-filter-folder')?.value || 'all';
+
+      const filterFn = (d, ignoreCategory = false) => {
         const isEnabled = d.is_enabled !== 0;
-        if (catFilter === 'disabled') return !isEnabled;
-        const cat = d.category || (d.can_post ? 'standard' : 'restricted');
-        const tags = d.auto_tags || [];
-        if (catFilter !== 'all' && cat !== catFilter && !tags.includes(catFilter)) return false;
-        const searchStr = `${d.parent_title || ''} ${d.title} ${d.username || ''} ${d.folder_name || ''} ${d.rules_summary || ''}`.toLowerCase();
-        return !q || searchStr.includes(q);
-      });
+        if (!ignoreCategory) {
+          if (catFilter === 'disabled' && isEnabled) return false;
+          const cat = d.category || (d.can_post ? 'standard' : 'restricted');
+          const tags = d.auto_tags || [];
+          if (catFilter !== 'all' && catFilter !== 'disabled' && cat !== catFilter && !tags.includes(catFilter)) return false;
+        }
+        if (folderFilter !== 'all') {
+          if (folderFilter.startsWith('folder:')) {
+            const wantFolder = folderFilter.slice(7).toLowerCase();
+            const hasFolder = (d.folder_name || '').toLowerCase().split(',').map(s => s.trim()).includes(wantFolder);
+            if (!hasFolder) return false;
+          } else if (folderFilter.startsWith('kind:')) {
+            if ((d.kind || '').toLowerCase() !== folderFilter.slice(5)) return false;
+          } else if (folderFilter === 'status:writable' && (!d.can_post || !isEnabled)) {
+            return false;
+          } else if (folderFilter === 'status:enabled' && !isEnabled) {
+            return false;
+          } else if (folderFilter === 'status:disabled' && isEnabled) {
+            return false;
+          }
+        }
+        return matchDestinationSearch(d, q);
+      };
+
+      let filtered = STATE.destinations.filter(d => filterFn(d, false));
+      let searchedAllFallback = false;
+      if (q && filtered.length === 0 && catFilter !== 'all') {
+        filtered = STATE.destinations.filter(d => filterFn(d, true));
+        if (filtered.length > 0) searchedAllFallback = true;
+      }
 
       STATE.visibleGroupIds = filtered.map(d => Number(d.id));
       updateBulkSelectedUI();
 
-      document.getElementById('group-count-badge').innerText = `${filtered.length} groups shown`;
+      document.getElementById('group-count-badge').innerText = searchedAllFallback
+        ? `${filtered.length} groups shown (found across All Categories)`
+        : `${filtered.length} groups shown`;
       const tbody = document.getElementById('groups-table-body');
       tbody.innerHTML = filtered.length ? filtered.map(d => {
         const currentCat = d.category || (d.can_post ? 'standard' : 'restricted');
@@ -1769,7 +1912,7 @@
     function renderCampaignDestinationsPicker() {
       const accId = Number(document.getElementById('camp-account').value);
       const q = (document.getElementById('camp-group-search')?.value || '').toLowerCase();
-      const groups = STATE.destinations.filter(d => d.account_id === accId && (!q || d.title.toLowerCase().includes(q) || (d.category || '').toLowerCase().includes(q)));
+      const groups = STATE.destinations.filter(d => d.account_id === accId && matchDestinationSearch(d, q));
 
       document.getElementById('camp-selected-count').innerText = STATE.selectedCampaignDestinations.size;
       const box = document.getElementById('camp-destinations-box');
