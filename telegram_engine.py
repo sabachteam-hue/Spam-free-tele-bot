@@ -516,6 +516,109 @@ def analyze_entity_and_rules(entity, rule_text: str = "", folder_names: Optional
     }
 
 
+async def find_best_forum_selling_topic(client: TelegramClient, entity) -> tuple:
+    """
+    For a Forum Supergroup (group with multiple sub-chats/topics), finds the SINGLE best open
+    Public / General / Market / Buying-Selling sub-chat where members actively post marketing/selling ads,
+    and ignores Admin/Rules/Scam-Report/Support topics.
+    Returns (best_topic_id, best_topic_title, has_open_topic).
+    """
+    try:
+        req_cls = getattr(functions.messages, "GetForumTopicsRequest", None)
+        if req_cls:
+            res = await asyncio.wait_for(
+                client(req_cls(peer=entity, offset_date=None, offset_id=0, offset_topic=0, limit=50)),
+                timeout=3.0,
+            )
+        else:
+            res = await asyncio.wait_for(
+                client(
+                    functions.channels.GetForumTopicsRequest(
+                        channel=entity, offset_date=None, offset_id=0, offset_topic=0, limit=50
+                    )
+                ),
+                timeout=3.0,
+            )
+    except Exception:
+        return (1, "General", True)
+
+    topics = getattr(res, "topics", []) or []
+    if not topics:
+        return (1, "General", True)
+
+    blocked_keywords = (
+        "scam", "report", "legit", "check", "rule", "nội quy", "quy định",
+        "thông báo", "announce", "support", "hỗ trợ", "admin", "uy tín",
+        "cảnh báo", "warning", "khiếu nại", "feedback", "event", "minigame",
+        "282", "956", "mở khoá", "unlock", "tut", "báo cáo", "verify", "xác minh",
+    )
+    market_keywords = (
+        "mua bán", "trao đổi", "chợ", "market", "buy", "sell", "trade",
+        "quảng cáo", "bán", "shop", "store", "promo", "marketing", "dịch vụ",
+        "service", "giao dịch",
+    )
+    general_keywords = (
+        "general", "chat", "cộng đồng", "giao lưu", "thảo luận", "public", "main", "tán gẫu",
+    )
+    selling_msg_indicators = (
+        "$", "usdt", "vnd", "₫", "giá", "price", "buy", "sell", "mua", "bán",
+        "stock", "acc", "pro", "plus", "ib", "inbox", "dm", "@", "t.me",
+    )
+
+    candidates = []
+    any_open = False
+    for t in topics:
+        t_id = getattr(t, "id", None)
+        t_title = (getattr(t, "title", None) or "").strip()
+        t_closed = bool(getattr(t, "closed", False))
+        if not t_id or not t_title or t_closed:
+            continue
+        any_open = True
+        low = t_title.lower()
+
+        if any(bk in low for bk in blocked_keywords):
+            continue
+
+        score = 10
+        if any(mk in low for mk in market_keywords):
+            score += 60
+        elif any(gk in low for gk in general_keywords) or int(t_id) == 1:
+            score += 45
+
+        candidates.append({"id": int(t_id), "title": t_title, "score": score})
+
+    if not any_open:
+        return (None, "All Topics Closed", False)
+
+    if not candidates:
+        for t in topics:
+            if getattr(t, "id", None) and not getattr(t, "closed", False):
+                return (int(t.id), str(getattr(t, "title", "General")), True)
+        return (1, "General", True)
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    top_candidates = candidates[:3]
+
+    for cand in top_candidates:
+        try:
+            msgs = await asyncio.wait_for(
+                client.get_messages(entity, reply_to=cand["id"], limit=8),
+                timeout=2.0,
+            )
+            sell_hits = 0
+            for m in (msgs or []):
+                mtxt = (getattr(m, "message", None) or "").lower()
+                if mtxt and any(ind in mtxt for ind in selling_msg_indicators):
+                    sell_hits += 1
+            cand["score"] += sell_hits * 10
+        except Exception:
+            pass
+
+    top_candidates.sort(key=lambda x: x["score"], reverse=True)
+    winner = top_candidates[0]
+    return (winner["id"], winner["title"], True)
+
+
 async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> dict:
     """
     Syncs all joined Groups, Supergroups, Channels, Forum Topics, and Telegram Chat Folders.
@@ -552,21 +655,28 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     dialogs = await client.get_dialogs(limit=None)
     group_dialogs = [d for d in dialogs if (d.is_group or d.is_channel) and int(d.id) not in deleted_main_ids]
 
-    # 2. Deep-scan group description, pinned rules, AND recent moderation bot messages/warnings concurrently
+    # 2. Deep-scan group description, pinned rules, recent moderation bot messages, AND active Forum Selling/General topic concurrently
     extra_rules: Dict[int, str] = {}
-    if deep_scan:
-        sem = asyncio.Semaphore(8)
-        rule_indicators = (
-            "rule", "nội quy", "quy định", "warning", "cảnh cáo", "cảnh báo",
-            "muted", "banned", "khóa mõm", "cấm", "không được", "not allowed",
-            "prohibited", "strictly", "no forward", "no emoji", "no link",
-            "24h", "1 bài", "1 post", "🚫", "⚠️", "❌"
-        )
+    forum_topic_map: Dict[int, tuple] = {}
+    sem = asyncio.Semaphore(8)
+    rule_indicators = (
+        "rule", "nội quy", "quy định", "warning", "cảnh cáo", "cảnh báo",
+        "muted", "banned", "khóa mõm", "cấm", "không được", "not allowed",
+        "prohibited", "strictly", "no forward", "no emoji", "no link",
+        "24h", "1 bài", "1 post", "🚫", "⚠️", "❌"
+    )
 
-        async def _scan_one(d):
-            entity = d.entity
-            text_parts = []
-            async with sem:
+    async def _scan_one(d):
+        entity = d.entity
+        text_parts = []
+        async with sem:
+            if getattr(entity, "forum", False):
+                try:
+                    forum_topic_map[d.id] = await find_best_forum_selling_topic(client, entity)
+                except Exception:
+                    forum_topic_map[d.id] = (1, "General", True)
+
+            if deep_scan:
                 # A) Group Description / Bio
                 try:
                     if isinstance(entity, types.Channel):
@@ -618,13 +728,14 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 except Exception:
                     pass
 
-            if text_parts:
-                extra_rules[d.id] = " ".join(text_parts)
+        if text_parts:
+            extra_rules[d.id] = " ".join(text_parts)
 
-        await asyncio.gather(*[_scan_one(d) for d in group_dialogs], return_exceptions=True)
+    await asyncio.gather(*[_scan_one(d) for d in group_dialogs], return_exceptions=True)
 
     conn = get_conn()
-    # Clean up any legacy NULL topic_id duplicates before upserting
+    # Clean up any legacy NULL topic_id duplicates or separate topic rows before upserting
+    conn.execute("DELETE FROM destinations WHERE kind = 'topic' OR COALESCE(topic_id, 0) > 0")
     conn.execute("""
         DELETE FROM destinations
         WHERE id NOT IN (
@@ -652,13 +763,27 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
         rule_text = title + " " + extra_rules.get(d.id, "")
         analysis = analyze_entity_and_rules(entity, rule_text, folders)
 
+        forum_topic_id = None
+        forum_topic_title = ""
+        if is_forum:
+            ft_id, ft_title, ft_open = forum_topic_map.get(d.id, (1, "General", True))
+            if not ft_open:
+                analysis["can_post"] = 0
+                analysis["category"] = "restricted"
+                analysis["rules_summary"] = "All Forum Topics Closed"
+            else:
+                forum_topic_id = ft_id
+                forum_topic_title = ft_title
+                analysis["rules_summary"] = f"Target Chat: #{ft_title} · " + analysis["rules_summary"]
+
         conn.execute(
             """
             INSERT INTO destinations (
                 account_id, telegram_id, topic_id, title, parent_title, username,
                 kind, can_post, restriction_until, slowmode_seconds, participants_count,
-                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, folder_name, updated_at
-            ) VALUES (?, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                auto_tags, category, allow_forwards, allow_links, allow_media,
+                rules_summary, folder_name, forum_topic_id, forum_topic_title, updated_at
+            ) VALUES (?, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id, telegram_id, topic_id) DO UPDATE SET
                 title=excluded.title,
                 username=excluded.username,
@@ -674,6 +799,8 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 allow_media=excluded.allow_media,
                 rules_summary=excluded.rules_summary,
                 folder_name=excluded.folder_name,
+                forum_topic_id=excluded.forum_topic_id,
+                forum_topic_title=excluded.forum_topic_title,
                 updated_at=excluded.updated_at
             """,
             (
@@ -693,72 +820,12 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 analysis["allow_media"],
                 analysis["rules_summary"],
                 analysis["folder_name"],
+                forum_topic_id,
+                forum_topic_title,
                 now_iso(),
             ),
         )
         synced_count += 1
-
-        if is_forum and analysis["can_post"]:
-            try:
-                res = await client(
-                    functions.channels.GetForumTopicsRequest(
-                        channel=entity,
-                        offset_date=None,
-                        offset_id=0,
-                        offset_topic=0,
-                        limit=50,
-                    )
-                )
-                for topic in getattr(res, "topics", []):
-                    topic_title = getattr(topic, "title", None)
-                    topic_id = getattr(topic, "id", None)
-                    topic_closed = getattr(topic, "closed", False)
-                    if topic_title and topic_id and (int(d.id), int(topic_id)) not in deleted_topic_pairs:
-                        t_analysis = analyze_entity_and_rules(entity, rule_text + " " + topic_title, folders)
-                        conn.execute(
-                            """
-                            INSERT INTO destinations (
-                                account_id, telegram_id, topic_id, title, parent_title, username,
-                                kind, can_post, restriction_until, slowmode_seconds, participants_count,
-                                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, folder_name, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(account_id, telegram_id, topic_id) DO UPDATE SET
-                                title=excluded.title,
-                                parent_title=excluded.parent_title,
-                                can_post=excluded.can_post,
-                                auto_tags=excluded.auto_tags,
-                                category=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.category ELSE excluded.category END,
-                                allow_forwards=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.allow_forwards ELSE excluded.allow_forwards END,
-                                allow_links=excluded.allow_links,
-                                allow_media=excluded.allow_media,
-                                rules_summary=excluded.rules_summary,
-                                folder_name=excluded.folder_name,
-                                updated_at=excluded.updated_at
-                            """,
-                            (
-                                account_id,
-                                d.id,
-                                int(topic_id),
-                                topic_title,
-                                title,
-                                username,
-                                0 if topic_closed else t_analysis["can_post"],
-                                t_analysis["restriction_until"],
-                                t_analysis["slowmode_seconds"],
-                                participants,
-                                t_analysis["auto_tags"],
-                                "restricted" if topic_closed else t_analysis["category"],
-                                t_analysis["allow_forwards"],
-                                t_analysis["allow_links"],
-                                t_analysis["allow_media"],
-                                t_analysis["rules_summary"],
-                                t_analysis["folder_name"],
-                                now_iso(),
-                            ),
-                        )
-                        synced_count += 1
-            except Exception:
-                pass
 
     conn.execute("UPDATE accounts SET last_sync_at = ?, status = 'connected' WHERE id = ?", (now_iso(), account_id))
     conn.commit()
@@ -1080,9 +1147,10 @@ async def execute_campaign_round(campaign: dict):
 
         try:
             target_peer = int(dest["telegram_id"])
-            raw_topic = dest.get("topic_id")
+            raw_topic = dest.get("forum_topic_id") or dest.get("topic_id")
             topic_id = int(raw_topic) if (raw_topic and int(raw_topic) > 0) else None
-            delivery_note = "Delivered OK"
+            topic_note = f" [Topic: #{dest.get('forum_topic_title')}]" if dest.get("forum_topic_title") else ""
+            delivery_note = f"Delivered OK{topic_note}"
             strip_emoji = (dest_cat == "text_only" or "no_emoji" in dest_tags or "text_only" in dest_tags)
 
             if tmpl["mode"] == "forward" and tmpl.get("source_message_id"):

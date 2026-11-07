@@ -95,9 +95,9 @@
         <h2 id="page-title" class="text-lg font-extrabold text-slate-900">Dashboard Overview</h2>
       </div>
       <div class="flex items-center gap-3">
-        <button onclick="refreshAll()" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 transition">
-          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-          <span>Refresh</span>
+        <button id="top-refresh-btn" onclick="refreshAll(true)" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 transition">
+          <i id="top-refresh-icon" data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span id="top-refresh-text">Refresh</span>
         </button>
         <button onclick="openCampaignModal()" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-xs font-bold text-white shadow transition">
           <i data-lucide="plus" class="w-3.5 h-3.5"></i>
@@ -657,6 +657,7 @@
 
     async function api(url, opts = {}) {
       const res = await fetch(url, {
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         ...opts
       });
@@ -699,7 +700,13 @@
       return `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase ${cls}">${status}</span>`;
     }
 
-    async function refreshAll() {
+    async function refreshAll(isManual = false) {
+      const btnText = document.getElementById('top-refresh-text');
+      const btnIcon = document.getElementById('top-refresh-icon');
+      if (isManual && btnText) {
+        btnText.innerText = 'Refreshing...';
+        if (btnIcon) btnIcon.classList.add('animate-spin');
+      }
       try {
         const [dash, accounts, destinations, templates, campaigns, proxies] = await Promise.all([
           api('/api/dashboard'),
@@ -740,9 +747,17 @@
         renderTemplates();
         renderCampaigns();
         renderProxies();
+        if (!document.getElementById('view-logs').classList.contains('hidden')) {
+          await loadLogs();
+        }
         if (window.lucide) lucide.createIcons();
+        if (isManual && btnText) {
+          btnText.innerText = 'Updated ✓';
+          setTimeout(() => { if (btnText) btnText.innerText = 'Refresh'; }, 1200);
+        }
       } catch (e) {
         console.error(e);
+        if (isManual && btnText) btnText.innerText = 'Refresh';
       }
     }
 
@@ -1045,6 +1060,7 @@
             <div class="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
               <span>${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}</span>
               ${d.username ? `<span class="text-slate-400 font-normal">@${d.username}</span>` : ''}
+              ${d.forum_topic_title ? `<span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">Sub-Chat: #${d.forum_topic_title}</span>` : ''}
               ${d.folder_name ? `<span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">Folder: ${d.folder_name}</span>` : ''}
               ${!isEnabled ? `<span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold uppercase">Disabled</span>` : ''}
             </div>
@@ -1396,7 +1412,13 @@
             </div>
             <div>
               <span class="text-slate-400 block text-[10px] font-bold uppercase">Next Scheduled Run</span>
-              <span class="font-bold text-indigo-700">${c.next_run_at ? new Date(c.next_run_at).toLocaleTimeString() : 'Immediate'}</span>
+              <span class="font-bold text-indigo-700">${
+                c.status !== 'running'
+                  ? 'Paused'
+                  : (c.next_run_in_seconds > 0
+                      ? `In ${Math.floor(c.next_run_in_seconds / 60)}m ${c.next_run_in_seconds % 60}s`
+                      : 'Running Now')
+              }</span>
             </div>
           </div>
           ${c.last_error ? `<div class="text-xs bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-xl font-medium">Notice: ${c.last_error}</div>` : ''}

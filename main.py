@@ -422,9 +422,20 @@ async def list_campaigns():
     ).fetchall()
     conn.close()
     result = []
+    now_dt = datetime.now(timezone.utc)
     for r in rows:
         d = dict(r)
         d["destination_ids"] = json.loads(d["destination_ids"] or "[]")
+        d["next_run_in_seconds"] = 0
+        if d.get("next_run_at"):
+            try:
+                nxt = datetime.fromisoformat(d["next_run_at"].replace("Z", "+00:00"))
+                if nxt.tzinfo is None:
+                    nxt = nxt.replace(tzinfo=timezone.utc)
+                diff = int((nxt - now_dt).total_seconds())
+                d["next_run_in_seconds"] = max(0, diff)
+            except Exception:
+                d["next_run_in_seconds"] = 0
         result.append(d)
     return result
 
