@@ -16,6 +16,8 @@
     .badge-red { background: #fee2e2; color: #991b1b; }
     .badge-amber { background: #fef3c7; color: #92400e; }
     .badge-blue { background: #dbeafe; color: #1e40af; }
+    .badge-purple { background: #f3e8ff; color: #6b21a8; }
+    .badge-slate { background: #f1f5f9; color: #334155; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
   </style>
@@ -46,7 +48,7 @@
         </button>
         <button onclick="switchTab('groups')" id="nav-groups" class="nav-btn w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition">
           <i data-lucide="users" class="w-4 h-4 shrink-0"></i>
-          <span>Groups & Topics</span>
+          <span>Groups & Categories</span>
         </button>
         <button onclick="switchTab('templates')" id="nav-templates" class="nav-btn w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition">
           <i data-lucide="file-text" class="w-4 h-4 shrink-0"></i>
@@ -77,11 +79,10 @@
         <span class="bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider">ACTIVE</span>
       </div>
       <ul class="text-slate-400 space-y-1 text-[11px]">
-        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> Saved Messages Forward</li>
-        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> Random Delay Jitter</li>
-        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> Pre-Check Group Rights</li>
-        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> FloodWait +5m Buffer</li>
-        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> Spintax & Typing Action</li>
+        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> Auto Group Rule Scanner</li>
+        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> Clean Copy (No-Forward Bypass)</li>
+        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> 24-Hour (1 Post/Day) Guard</li>
+        <li class="flex items-center gap-1.5"><i data-lucide="check" class="w-3.5 h-3.5 text-emerald-400"></i> Random Jitter & FloodWait +5m</li>
       </ul>
     </div>
   </aside>
@@ -156,13 +157,13 @@
         <!-- Quick Workflow Banner -->
         <div class="bg-gradient-to-r from-[#1a2b88] to-indigo-800 rounded-2xl p-6 text-white flex flex-col md:flex-row items-center justify-between gap-4 shadow">
           <div>
-            <h3 class="text-lg font-extrabold">Automated Anti-Ban Delivery Workflow</h3>
+            <h3 class="text-lg font-extrabold">Automated Anti-Ban & Smart Category Workflow</h3>
             <p class="text-xs text-indigo-100 mt-1">
-              1. Connect Account (Phone OTP / QR / Session) &rarr; 2. Sync Groups & Check Permissions &rarr; 3. Pick Saved Message or Spintax Template &rarr; 4. Launch Safe Campaign
+              1. Connect Account &rarr; 2. Auto-Scan Group Rules & Tags (No-Forward, 24h Limit, Premium Emoji) &rarr; 3. Pick Saved Message &rarr; 4. Launch By Category
             </p>
           </div>
           <div class="flex gap-2.5 shrink-0">
-            <button onclick="switchTab('accounts')" class="px-4 py-2.5 rounded-xl bg-white text-[#1a2b88] font-bold text-xs shadow hover:bg-slate-50 transition">Connect Account</button>
+            <button onclick="switchTab('groups')" class="px-4 py-2.5 rounded-xl bg-white text-[#1a2b88] font-bold text-xs shadow hover:bg-slate-50 transition">Scan & Categorize Groups</button>
             <button onclick="openCampaignModal()" class="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs shadow transition">Start Campaign</button>
           </div>
         </div>
@@ -205,18 +206,58 @@
         <div id="accounts-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
       </section>
 
-      <!-- 3. GROUPS & TOPICS VIEW -->
+      <!-- 3. GROUPS, TAGS & CATEGORIES VIEW -->
       <section id="view-groups" class="hidden space-y-4">
+        <!-- Category Summary Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
+          <button onclick="setGroupCategoryFilter('all')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-[#1a2b88] transition">
+            <span class="text-[10px] font-bold text-slate-400 uppercase block">All Synced</span>
+            <span id="cat-count-all" class="text-xl font-extrabold text-slate-900">0</span>
+          </button>
+          <button onclick="setGroupCategoryFilter('standard')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-emerald-600 transition">
+            <span class="text-[10px] font-bold text-emerald-600 uppercase block">Standard (Forward OK)</span>
+            <span id="cat-count-standard" class="text-xl font-extrabold text-emerald-700">0</span>
+          </button>
+          <button onclick="setGroupCategoryFilter('no_forward')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-indigo-600 transition">
+            <span class="text-[10px] font-bold text-indigo-600 uppercase block">No-Forward (Clean Copy)</span>
+            <span id="cat-count-no_forward" class="text-xl font-extrabold text-indigo-700">0</span>
+          </button>
+          <button onclick="setGroupCategoryFilter('24h_once')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-amber-600 transition">
+            <span class="text-[10px] font-bold text-amber-600 uppercase block">24h Limit (1 Post/Day)</span>
+            <span id="cat-count-24h_once" class="text-xl font-extrabold text-amber-700">0</span>
+          </button>
+          <button onclick="setGroupCategoryFilter('text_only')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-purple-600 transition">
+            <span class="text-[10px] font-bold text-purple-600 uppercase block">Text Only / No Media</span>
+            <span id="cat-count-text_only" class="text-xl font-extrabold text-purple-700">0</span>
+          </button>
+          <button onclick="setGroupCategoryFilter('restricted')" class="bg-white p-3.5 rounded-2xl border border-slate-200 text-left hover:border-rose-600 transition">
+            <span class="text-[10px] font-bold text-rose-600 uppercase block">Restricted / No Post</span>
+            <span id="cat-count-restricted" class="text-xl font-extrabold text-rose-700">0</span>
+          </button>
+        </div>
+
+        <!-- Filter & Deep Auto-Scan Bar -->
         <div class="bg-white p-4 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-center gap-3 flex-wrap">
-            <input id="group-search" oninput="renderGroups()" type="text" placeholder="Search groups or topics..." class="h-10 px-3.5 rounded-xl border border-slate-200 text-xs font-semibold outline-none focus:border-[#1a2b88] w-64" />
-            <select id="group-filter-perm" onchange="renderGroups()" class="h-10 px-3 rounded-xl border border-slate-200 text-xs font-semibold outline-none">
-              <option value="all">All Permissions</option>
-              <option value="can_post">Can Post Only</option>
-              <option value="no_post">Restricted / No Permission</option>
+            <input id="group-search" oninput="renderGroups()" type="text" placeholder="Search groups, @username, or rules..." class="h-10 px-3.5 rounded-xl border border-slate-200 text-xs font-semibold outline-none focus:border-[#1a2b88] w-64" />
+            <select id="group-filter-cat" onchange="renderGroups()" class="h-10 px-3 rounded-xl border border-slate-200 text-xs font-semibold outline-none">
+              <option value="all">All Distribution Categories</option>
+              <option value="standard">Standard (Forward & Premium Emoji OK)</option>
+              <option value="no_forward">No-Forward (Auto Clean-Copy Mode)</option>
+              <option value="24h_once">24-Hour Limit (Max 1 Post / 24h)</option>
+              <option value="slowmode">Slowmode Active Groups</option>
+              <option value="no_links">No Links Allowed</option>
+              <option value="text_only">Text Only (No Media / Custom Emojis)</option>
+              <option value="restricted">Restricted (Cannot Post)</option>
             </select>
           </div>
-          <span id="group-count-badge" class="text-xs font-bold text-slate-600">0 destinations</span>
+          <div class="flex items-center gap-3">
+            <span id="group-count-badge" class="text-xs font-bold text-slate-500">0 groups shown</span>
+            <button onclick="runDeepAutoScan(this)" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white text-xs font-bold shadow transition">
+              <i data-lucide="radar" class="w-4 h-4"></i>
+              <span>Auto-Scan Group Rules & Assign Tags</span>
+            </button>
+          </div>
         </div>
 
         <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
@@ -224,9 +265,9 @@
             <thead>
               <tr class="bg-slate-50 text-slate-500 border-b border-slate-100">
                 <th class="p-3 font-bold">Group / Topic Title</th>
-                <th class="p-3 font-bold">Type</th>
-                <th class="p-3 font-bold">Account</th>
+                <th class="p-3 font-bold">Auto-Detected Tags & Rules</th>
                 <th class="p-3 font-bold">Slowmode</th>
+                <th class="p-3 font-bold">Distribution Category (Editable)</th>
                 <th class="p-3 font-bold">Posting Status</th>
               </tr>
             </thead>
@@ -240,7 +281,7 @@
         <div class="flex items-center justify-between">
           <div>
             <h3 class="font-extrabold text-base text-slate-900">Message Templates & Saved Messages Forwarder</h3>
-            <p class="text-xs text-slate-500">Use Native "Saved Messages" Forwarding (recommended) or Spintax Text <code class="bg-slate-200 px-1 rounded">{Hello|Hi|Hey}</code> so every message hash is unique.</p>
+            <p class="text-xs text-slate-500">Use Native "Saved Messages" Forwarding (auto-switches to Clean Copy in No-Forward groups!) or Spintax Text <code class="bg-slate-200 px-1 rounded">{Hello|Hi|Hey}</code>.</p>
           </div>
           <button onclick="openTemplateModal()" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1a2b88] text-white text-xs font-bold shadow">
             <i data-lucide="plus" class="w-4 h-4"></i>
@@ -269,8 +310,8 @@
       <section id="view-proxies" class="hidden space-y-6">
         <div class="flex items-center justify-between">
           <div>
-            <h3 class="font-extrabold text-base text-slate-900">Anti-Ban SOCKS5 / HTTP Proxies</h3>
-            <p class="text-xs text-slate-500">Assign separate proxies when running multiple Telegram accounts to prevent IP correlation bans.</p>
+            <h3 class="font-extrabold text-base text-slate-900">Anti-Ban SOCKS5 / HTTP Proxies (Optional)</h3>
+            <p class="text-xs text-slate-500">Not required for 1-2 accounts (Direct VPS IP is safe). Only add proxies if running many accounts simultaneously.</p>
           </div>
           <button onclick="openProxyModal()" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1a2b88] text-white text-xs font-bold shadow">
             <i data-lucide="plus" class="w-4 h-4"></i>
@@ -387,7 +428,7 @@
         <div>
           <label class="block font-bold mb-1">Sending Mode (Anti-Spam Strategy)</label>
           <select id="tmpl-mode" onchange="toggleTemplateMode()" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold">
-            <option value="forward">Forward from Saved Messages (Recommended — Preserves Media & Emojis)</option>
+            <option value="forward">Forward from Saved Messages (Preserves Premium Emojis & Media + Auto Clean-Copy)</option>
             <option value="text">Custom Text / HTML with Spintax {Hi|Hello|Hey}</option>
           </select>
         </div>
@@ -450,17 +491,19 @@
           <select id="camp-template" class="w-full h-10 px-3 rounded-xl border border-slate-200 font-semibold"></select>
         </div>
 
-        <!-- Destinations Picker with Permission Filter -->
+        <!-- Destinations Picker with Smart Category Selector -->
         <div class="border border-slate-200 rounded-2xl p-3.5 space-y-2.5 bg-slate-50">
           <div class="flex items-center justify-between flex-wrap gap-2">
-            <span class="font-extrabold text-slate-800">Select Destination Groups & Topics (<span id="camp-selected-count">0</span> selected)</span>
-            <div class="flex gap-2">
-              <button type="button" onclick="syncAccountFromCampaignModal()" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-[#1a2b88]">Sync Groups</button>
-              <button type="button" onclick="toggleSelectAllCampaignGroups(true)" class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold">Select All Writable</button>
-              <button type="button" onclick="toggleSelectAllCampaignGroups(false)" class="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-700 font-bold">Deselect All</button>
+            <span class="font-extrabold text-slate-800">Select Destination Groups (<span id="camp-selected-count">0</span> selected)</span>
+            <div class="flex flex-wrap gap-1.5">
+              <button type="button" onclick="selectCampaignCategory('all_writable')" class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px]">All Writable</button>
+              <button type="button" onclick="selectCampaignCategory('standard')" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-700 text-[11px]">Only Standard</button>
+              <button type="button" onclick="selectCampaignCategory('no_forward')" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-indigo-700 text-[11px]">Only No-Forward</button>
+              <button type="button" onclick="selectCampaignCategory('24h_once')" class="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-amber-700 text-[11px]">Only 24h Groups</button>
+              <button type="button" onclick="selectCampaignCategory('none')" class="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-700 font-bold text-[11px]">Clear</button>
             </div>
           </div>
-          <input id="camp-group-search" oninput="renderCampaignDestinationsPicker()" type="text" placeholder="Filter groups by name..." class="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-semibold" />
+          <input id="camp-group-search" oninput="renderCampaignDestinationsPicker()" type="text" placeholder="Filter groups by name or category..." class="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-semibold" />
           <div id="camp-destinations-box" class="max-h-44 overflow-y-auto space-y-1.5 bg-white p-2 rounded-xl border border-slate-200"></div>
         </div>
 
@@ -568,6 +611,18 @@
 
     const TABS = ['dashboard', 'accounts', 'groups', 'templates', 'campaigns', 'proxies', 'logs'];
 
+    const TAG_LABELS = {
+      standard: { label: 'Standard OK', cls: 'badge-green' },
+      forward_ok: { label: 'Forward OK', cls: 'badge-green' },
+      premium_emoji_ok: { label: 'Premium Emoji OK', cls: 'badge-blue' },
+      no_forward: { label: 'No Forward (Clean Copy)', cls: 'badge-purple' },
+      '24h_once': { label: '1 Post / 24h', cls: 'badge-amber' },
+      slowmode: { label: 'Slowmode', cls: 'badge-amber' },
+      no_links: { label: 'No Links', cls: 'badge-red' },
+      text_only: { label: 'Text Only', cls: 'badge-slate' },
+      restricted: { label: 'Restricted', cls: 'badge-red' }
+    };
+
     function switchTab(tab) {
       TABS.forEach(t => {
         document.getElementById(`view-${t}`).classList.toggle('hidden', t !== tab);
@@ -581,7 +636,7 @@
       const titles = {
         dashboard: 'Dashboard Overview',
         accounts: 'Telegram Accounts Management',
-        groups: 'Synced Groups, Channels & Forum Topics',
+        groups: 'Groups, Auto-Tags & Distribution Categories',
         templates: 'Message Templates & Saved Messages Forwarder',
         campaigns: 'Automated Campaigns & Anti-Spam Scheduler',
         proxies: 'Proxy Servers',
@@ -651,7 +706,6 @@
         STATE.campaigns = campaigns;
         STATE.proxies = proxies;
 
-        // Update stats
         document.getElementById('stat-accounts-conn').innerText = dash.accounts_connected;
         document.getElementById('stat-accounts-total').innerText = dash.accounts_total;
         document.getElementById('stat-groups-post').innerText = dash.groups_can_post;
@@ -661,7 +715,6 @@
         document.getElementById('stat-sent').innerText = dash.sent_total;
         document.getElementById('stat-failed').innerText = dash.failed_total;
 
-        // Render dashboard logs
         const dashLogs = document.getElementById('dash-logs-body');
         dashLogs.innerHTML = dash.recent_logs.length ? dash.recent_logs.map(l => `
           <tr class="hover:bg-slate-50">
@@ -868,27 +921,101 @@
       refreshAll();
     }
 
-    // ==================== GROUPS ====================
+    // ==================== GROUPS, AUTO-TAGS & CATEGORIES ====================
+    function setGroupCategoryFilter(cat) {
+      document.getElementById('group-filter-cat').value = cat;
+      renderGroups();
+    }
+
+    async function runDeepAutoScan(btn) {
+      const oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<span>Scanning Descriptions, Pinned Rules & Permissions...</span>`;
+      try {
+        const res = await api('/api/destinations/auto-scan', { method: 'POST' });
+        await refreshAll();
+        alert(`Auto-Scan Complete! Analyzed ${res.scanned} groups & topics and assigned smart tags & distribution categories.`);
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+        if (window.lucide) lucide.createIcons();
+      }
+    }
+
+    async function changeGroupCategory(destId, newCat) {
+      try {
+        await api(`/api/destinations/${destId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ category: newCat })
+        });
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function renderTagBadges(tags) {
+      if (!tags || !tags.length) return '';
+      return tags.map(t => {
+        const info = TAG_LABELS[t] || { label: t, cls: 'badge-slate' };
+        return `<span class="px-2 py-0.5 rounded-md text-[10px] font-bold ${info.cls}">${info.label}</span>`;
+      }).join(' ');
+    }
+
     function renderGroups() {
-      const q = (document.getElementById('group-search')?.value || '').toLowerCase();
-      const perm = document.getElementById('group-filter-perm')?.value || 'all';
-      const filtered = STATE.destinations.filter(d => {
-        if (perm === 'can_post' && !d.can_post) return false;
-        if (perm === 'no_post' && d.can_post) return false;
-        const title = `${d.parent_title ? d.parent_title + ' › ' : ''}${d.title}`.toLowerCase();
-        return !q || title.includes(q);
+      // Update category counts
+      const counts = { all: STATE.destinations.length, standard: 0, no_forward: 0, '24h_once': 0, text_only: 0, restricted: 0 };
+      STATE.destinations.forEach(d => {
+        const c = d.category || (d.can_post ? 'standard' : 'restricted');
+        if (counts[c] !== undefined) counts[c]++;
       });
-      document.getElementById('group-count-badge').innerText = `${filtered.length} destinations`;
+      Object.keys(counts).forEach(k => {
+        const el = document.getElementById(`cat-count-${k}`);
+        if (el) el.innerText = counts[k];
+      });
+
+      const q = (document.getElementById('group-search')?.value || '').toLowerCase();
+      const catFilter = document.getElementById('group-filter-cat')?.value || 'all';
+
+      const filtered = STATE.destinations.filter(d => {
+        const cat = d.category || (d.can_post ? 'standard' : 'restricted');
+        const tags = d.auto_tags || [];
+        if (catFilter !== 'all' && cat !== catFilter && !tags.includes(catFilter)) return false;
+        const searchStr = `${d.parent_title || ''} ${d.title} ${d.username || ''} ${d.rules_summary || ''}`.toLowerCase();
+        return !q || searchStr.includes(q);
+      });
+
+      document.getElementById('group-count-badge').innerText = `${filtered.length} groups shown`;
       const tbody = document.getElementById('groups-table-body');
-      tbody.innerHTML = filtered.length ? filtered.map(d => `
+      tbody.innerHTML = filtered.length ? filtered.map(d => {
+        const currentCat = d.category || (d.can_post ? 'standard' : 'restricted');
+        return `
         <tr class="hover:bg-slate-50">
-          <td class="p-3 font-bold text-slate-900">
-            ${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}
-            ${d.username ? `<span class="text-slate-400 font-normal ml-1">@${d.username}</span>` : ''}
+          <td class="p-3">
+            <div class="font-bold text-slate-900">
+              ${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}
+              ${d.username ? `<span class="text-slate-400 font-normal ml-1">@${d.username}</span>` : ''}
+            </div>
+            <div class="text-[10px] text-slate-400 uppercase font-semibold mt-0.5">${d.kind} · Account: ${d.account_name || '-'}</div>
           </td>
-          <td class="p-3 uppercase text-[11px] font-bold text-slate-500">${d.kind}</td>
-          <td class="p-3 font-semibold text-slate-700">${d.account_name || '-'}</td>
-          <td class="p-3 text-slate-600">${d.slowmode_seconds ? `${d.slowmode_seconds}s` : 'None'}</td>
+          <td class="p-3 space-y-1">
+            <div class="flex flex-wrap gap-1">${renderTagBadges(d.auto_tags)}</div>
+            <div class="text-[11px] text-slate-500">${d.rules_summary || 'Standard permissions'}</div>
+          </td>
+          <td class="p-3 text-slate-600 font-semibold">${d.slowmode_seconds ? `${d.slowmode_seconds}s` : 'None'}</td>
+          <td class="p-3">
+            <select onchange="changeGroupCategory(${d.id}, this.value)" class="h-8 px-2.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-800 outline-none focus:border-[#1a2b88]">
+              <option value="standard" ${currentCat === 'standard' ? 'selected' : ''}>Standard (Forward OK)</option>
+              <option value="no_forward" ${currentCat === 'no_forward' ? 'selected' : ''}>No-Forward (Clean Copy)</option>
+              <option value="24h_once" ${currentCat === '24h_once' ? 'selected' : ''}>24h Limit (1 Post/Day)</option>
+              <option value="slowmode" ${currentCat === 'slowmode' ? 'selected' : ''}>Slowmode Group</option>
+              <option value="no_links" ${currentCat === 'no_links' ? 'selected' : ''}>No Links Allowed</option>
+              <option value="text_only" ${currentCat === 'text_only' ? 'selected' : ''}>Text Only (No Media)</option>
+              <option value="restricted" ${currentCat === 'restricted' ? 'selected' : ''}>Restricted (Skip)</option>
+            </select>
+          </td>
           <td class="p-3">
             ${d.can_post
               ? `<span class="badge-green px-2.5 py-0.5 rounded-full text-[11px] font-bold">Can Post</span>`
@@ -896,7 +1023,7 @@
             ${d.restriction_until ? `<span class="text-[10px] text-amber-700 block mt-0.5">Until ${new Date(d.restriction_until).toLocaleTimeString()}</span>` : ''}
           </td>
         </tr>
-      `).join('') : `<tr><td colspan="5" class="p-6 text-center text-slate-400">No groups synced yet. Connect an account and click "Sync Groups & Topics".</td></tr>`;
+      `}).join('') : `<tr><td colspan="5" class="p-6 text-center text-slate-400">No matching groups found.</td></tr>`;
     }
 
     // ==================== TEMPLATES ====================
@@ -976,7 +1103,7 @@
             <div class="flex items-center justify-between">
               <h4 class="font-extrabold text-sm text-slate-900">${t.name}</h4>
               <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold ${t.mode === 'forward' ? 'badge-blue' : 'badge-green'}">
-                ${t.mode === 'forward' ? `Forward Saved Msg #${t.source_message_id}` : 'Spintax / Text'}
+                ${t.mode === 'forward' ? `Saved Msg #${t.source_message_id} (Forward / Clean Copy)` : 'Spintax / Text'}
               </span>
             </div>
             <p class="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl whitespace-pre-wrap line-clamp-3">${t.content || ''}</p>
@@ -1021,30 +1148,50 @@
       renderCampaignDestinationsPicker();
     }
 
+    function selectCampaignCategory(catType) {
+      const accId = Number(document.getElementById('camp-account').value);
+      const writable = STATE.destinations.filter(d => d.account_id === accId && d.can_post);
+      STATE.selectedCampaignDestinations.clear();
+      if (catType === 'all_writable') {
+        writable.forEach(d => STATE.selectedCampaignDestinations.add(d.id));
+      } else if (catType !== 'none') {
+        writable.forEach(d => {
+          const c = d.category || 'standard';
+          const tags = d.auto_tags || [];
+          if (c === catType || tags.includes(catType)) {
+            STATE.selectedCampaignDestinations.add(d.id);
+          }
+        });
+      }
+      renderCampaignDestinationsPicker();
+    }
+
     function renderCampaignDestinationsPicker() {
       const accId = Number(document.getElementById('camp-account').value);
       const q = (document.getElementById('camp-group-search')?.value || '').toLowerCase();
-      const groups = STATE.destinations.filter(d => d.account_id === accId && (!q || d.title.toLowerCase().includes(q) || (d.parent_title || '').toLowerCase().includes(q)));
+      const groups = STATE.destinations.filter(d => d.account_id === accId && (!q || d.title.toLowerCase().includes(q) || (d.category || '').toLowerCase().includes(q)));
 
       document.getElementById('camp-selected-count').innerText = STATE.selectedCampaignDestinations.size;
       const box = document.getElementById('camp-destinations-box');
       if (!groups.length) {
-        box.innerHTML = `<div class="p-4 text-center text-slate-400">No synced groups for this account. Click "Sync Groups" above.</div>`;
+        box.innerHTML = `<div class="p-4 text-center text-slate-400">No synced groups for this account.</div>`;
         return;
       }
       box.innerHTML = groups.map(g => {
         const checked = STATE.selectedCampaignDestinations.has(g.id) ? 'checked' : '';
         const disabled = !g.can_post ? 'disabled' : '';
+        const cat = g.category || 'standard';
+        const catInfo = TAG_LABELS[cat] || { label: cat, cls: 'badge-slate' };
         return `
           <label class="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 ${!g.can_post ? 'opacity-50' : 'cursor-pointer'}">
             <div class="flex items-center gap-2.5">
               <input type="checkbox" ${checked} ${disabled} onchange="toggleCampaignDest(${g.id}, this.checked)" class="w-4 h-4 rounded" />
               <span class="font-semibold text-slate-800">${g.parent_title ? `<span class="text-slate-400">${g.parent_title} › </span>` : ''}${g.title}</span>
-              <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-bold">${g.kind}</span>
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${catInfo.cls}">${catInfo.label}</span>
             </div>
             ${g.can_post
               ? `<span class="text-[10px] font-bold text-emerald-600">Can post</span>`
-              : `<span class="text-[10px] font-bold text-rose-600">No permission</span>`}
+              : `<span class="text-[10px] font-bold text-rose-600">Restricted</span>`}
           </label>
         `;
       }).join('');
@@ -1054,21 +1201,6 @@
       if (isChecked) STATE.selectedCampaignDestinations.add(id);
       else STATE.selectedCampaignDestinations.delete(id);
       document.getElementById('camp-selected-count').innerText = STATE.selectedCampaignDestinations.size;
-    }
-
-    function toggleSelectAllCampaignGroups(selectAll) {
-      const accId = Number(document.getElementById('camp-account').value);
-      const writable = STATE.destinations.filter(d => d.account_id === accId && d.can_post);
-      if (selectAll) writable.forEach(d => STATE.selectedCampaignDestinations.add(d.id));
-      else STATE.selectedCampaignDestinations.clear();
-      renderCampaignDestinationsPicker();
-    }
-
-    async function syncAccountFromCampaignModal() {
-      const accId = Number(document.getElementById('camp-account').value);
-      if (!accId) return alert('Select an account first');
-      await syncAccount(accId);
-      renderCampaignDestinationsPicker();
     }
 
     async function submitCampaign() {

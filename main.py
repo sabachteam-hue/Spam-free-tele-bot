@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -71,7 +71,7 @@ class ProxyCreate(BaseModel):
 
 class TemplateCreate(BaseModel):
     name: str
-    mode: str = "text"  # 'text' or 'forward'
+    mode: str = "text"
     content: str = ""
     parse_mode: str = "html"
     source_account_id: Optional[int] = None
@@ -92,7 +92,12 @@ class CampaignCreate(BaseModel):
 
 
 class CampaignStatusUpdate(BaseModel):
-    status: str  # 'running' or 'paused'
+    status: str
+
+
+class DestinationCategoryUpdate(BaseModel):
+    category: str
+    allow_forwards: Optional[int] = None
 
 
 # ==================== DASHBOARD OVERVIEW ====================
@@ -231,11 +236,39 @@ async def login_qr_status(account_id: int):
 
 
 @app.post("/api/telegram/accounts/{account_id}/sync")
-async def sync_destinations(account_id: int):
+async def sync_destinations(account_id: int, deep_scan: bool = False):
     try:
-        return await sync_account_destinations(account_id)
+        return await sync_account_destinations(account_id, deep_scan=deep_scan)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/destinations/auto-scan")
+async def auto_scan_all_destinations():
+    """Deep-scans all connected Telegram accounts' groups (permissions, slowmode, description & pinned rules) and assigns tags & categories."""
+    conn = get_conn()
+    accs = conn.execute("SELECT id FROM accounts WHERE status = 'connected'").fetchall()
+    conn.close()
+    if not accs:
+        raise HTTPException(status_code=400, detail="No connected Telegram account found.")
+    total_scanned = 0
+    for a in accs:
+        res = await sync_account_destinations(a["id"], deep_scan=True)
+        total_scanned += res.get("count", 0)
+    return {"scanned": total_scanned}
+
+
+@app.patch("/api/destinations/{dest_id}")
+async def update_destination_category(dest_id: int, payload: DestinationCategoryUpdate):
+    conn = get_conn()
+    allow_fwd = 0 if payload.category == "no_forward" else (payload.allow_forwards if payload.allow_forwards is not None else 1)
+    conn.execute(
+        "UPDATE destinations SET category = ?, allow_forwards = ? WHERE id = ?",
+        (payload.category, allow_fwd, dest_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": dest_id, "category": payload.category}
 
 
 @app.get("/api/telegram/accounts/{account_id}/saved-messages")
@@ -260,7 +293,15 @@ async def list_destinations(account_id: Optional[int] = None):
             "SELECT d.*, a.name as account_name FROM destinations d LEFT JOIN accounts a ON d.account_id = a.id ORDER BY d.can_post DESC, d.title ASC"
         ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    res = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["auto_tags"] = json.loads(d.get("auto_tags") or '["standard"]')
+        except Exception:
+            d["auto_tags"] = ["standard"]
+        res.append(d)
+    return res
 
 
 # ==================== TEMPLATES ====================
@@ -501,4 +542,4 @@ async def list_activity():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8090, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=9095, reload=False)

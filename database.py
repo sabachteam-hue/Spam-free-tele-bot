@@ -14,7 +14,7 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 def init_db():
-    conn = get_conn()
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cur = conn.cursor()
 
     cur.execute("""
@@ -66,10 +66,32 @@ def init_db():
         restriction_until TEXT DEFAULT NULL,
         slowmode_seconds INTEGER DEFAULT 0,
         participants_count INTEGER DEFAULT 0,
+        auto_tags TEXT DEFAULT '["standard"]',
+        category TEXT DEFAULT 'standard',
+        allow_forwards INTEGER DEFAULT 1,
+        allow_links INTEGER DEFAULT 1,
+        allow_media INTEGER DEFAULT 1,
+        rules_summary TEXT DEFAULT '',
+        last_sent_at TEXT DEFAULT NULL,
         updated_at TEXT,
         UNIQUE(account_id, telegram_id, topic_id)
     )
     """)
+
+    # Auto-migrate existing destinations table if needed
+    existing_cols = [r[1] for r in cur.execute("PRAGMA table_info(destinations)").fetchall()]
+    migrations = {
+        "auto_tags": "TEXT DEFAULT '[\"standard\"]'",
+        "category": "TEXT DEFAULT 'standard'",
+        "allow_forwards": "INTEGER DEFAULT 1",
+        "allow_links": "INTEGER DEFAULT 1",
+        "allow_media": "INTEGER DEFAULT 1",
+        "rules_summary": "TEXT DEFAULT ''",
+        "last_sent_at": "TEXT DEFAULT NULL",
+    }
+    for col, col_def in migrations.items():
+        if col not in existing_cols:
+            cur.execute(f"ALTER TABLE destinations ADD COLUMN {col} {col_def}")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS templates (

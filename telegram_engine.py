@@ -6,7 +6,7 @@ import random
 import re
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import qrcode
 from telethon import TelegramClient, functions, types
@@ -20,7 +20,7 @@ from telethon.errors import (
     ChannelPrivateError,
     PeerFloodError,
     ChatAdminRequiredError,
-    MessageIdInvalidError,
+    ChatForwardsRestrictedError,
 )
 
 from database import get_conn, now_iso
@@ -42,7 +42,6 @@ def parse_spintax(text: str) -> str:
             break
         options = match.group(1).split("|")
         text = text[:match.start()] + random.choice(options) + text[match.end():]
-    # Replace dynamic anti-hash variables if used
     text = text.replace("{{time}}", datetime.now().strftime("%H:%M"))
     text = text.replace("{{date}}", datetime.now().strftime("%Y-%m-%d"))
     text = text.replace("{{rand}}", str(random.randint(1000, 9999)))
@@ -59,7 +58,7 @@ def get_proxy_dict(proxy_id: Optional[int]) -> Optional[dict]:
         return None
     p = dict(row)
     proxy_cfg = {
-        "proxy_type": p["proxy_type"].lower(),  # 'socks5', 'socks4', 'http'
+        "proxy_type": p["proxy_type"].lower(),
         "addr": p["host"],
         "port": int(p["port"]),
         "rdns": True,
@@ -184,7 +183,6 @@ async def start_qr_login(account_id: int) -> dict:
     await client.connect()
     qr_login = await client.qr_login()
 
-    # Generate base64 QR image
     img = qrcode.make(qr_login.url)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -249,10 +247,144 @@ async def finalize_login(account_id: int, client: TelegramClient) -> dict:
     }
 
 
-async def sync_account_destinations(account_id: int) -> dict:
+def analyze_entity_and_rules(entity, rule_text: str = "") -> dict:
+    """
+    Analyzes a Telegram group/channel entity + optional description/pinned rules text
+    and returns detected permissions, auto_tags, and primary category.
+    """
+    can_post = 1
+    restriction_until = None
+    allow_forwards = 1
+    allow_links = 1
+    allow_media = 1
+    slowmode_seconds = getattr(entity, "slowmode_seconds", 0) or 0
+    tags: List[str] = []
+    reasons: List[str] = []
+
+    if getattr(entity, "broadcast", False) and not getattr(entity, "creator", False):
+        admin_rights = getattr(entity, "admin_rights", None)
+        if not admin_rights or not getattr(admin_rights, "post_messages", False):
+            can_post = 0
+
+    banned_rights = getattr(entity, "banned_rights", None)
+    default_banned = getattr(entity, "default_banned_rights", None)
+
+    for rights_obj in [banned_rights, default_banned]:
+        if not rights_obj:
+            continue
+        if getattr(rights_obj, "send_messages", False):
+            if not getattr(entity, "creator", False) and not getattr(entity, "admin_rights", None):
+                can_post = 0
+                until_date = getattr(rights_obj, "until_date", None)
+                if until_date and until_date.year < 2099:
+                    restriction_until = until_date.isoformat()
+        if getattr(rights_obj, "embed_links", False):
+            allow_links = 0
+        if getattr(rights_obj, "send_media", False) or getattr(rights_obj, "send_photos", False):
+            allow_media = 0
+
+    if getattr(entity, "noforwards", False):
+        allow_forwards = 0
+
+    # Parse rule text (English + Vietnamese + Urdu/Hindi transliteration keywords)
+    txt = (rule_text or "").lower()
+    if any(k in txt for k in ["no forward", "don't forward", "do not forward", "forwarding not allowed", "cấm forward", "không forward"]):
+        allow_forwards = 0
+        reasons.append("Rule: No Forwarding")
+
+    if any(k in txt for k in ["no link", "links not allowed", "don't send link", "cấm link", "không chèn link", "no url"]):
+        allow_links = 0
+        reasons.append("Rule: No Links")
+
+    is_24h = False
+    if slowmode_seconds >= 3600 or any(
+        k in txt
+        for k in [
+            "24h",
+            "24 hour",
+            "24 hours",
+            "1 post per day",
+            "1 post/day",
+            "once a day",
+            "once per day",
+            "1 bài/ngày",
+            "1 lần/ngày",
+            "mỗi ngày 1",
+        ]
+    ):
+        is_24h = True
+        reasons.append("Rule: 1 Post / 24h")
+
+    if any(k in txt for k in ["no emoji", "no custom emoji", "no sticker", "no media", "text only"]):
+        tags.append("text_only")
+        reasons.append("Rule: Text Only / No Custom Emoji")
+    elif allow_media:
+        tags.append("premium_emoji_ok")
+
+    if not can_post:
+        tags.append("restricted")
+    else:
+        if is_24h:
+            tags.append("24h_once")
+        elif slowmode_seconds > 0:
+            tags.append("slowmode")
+
+        if not allow_forwards:
+            tags.append("no_forward")
+        else:
+            tags.append("forward_ok")
+
+        if not allow_links:
+            tags.append("no_links")
+
+        if not allow_media:
+            tags.append("text_only")
+
+        if not tags or tags == ["premium_emoji_ok", "forward_ok"]:
+            tags.append("standard")
+
+    # Determine primary distribution category
+    if not can_post:
+        category = "restricted"
+    elif is_24h:
+        category = "24h_once"
+    elif not allow_forwards:
+        category = "no_forward"
+    elif not allow_media or "text_only" in tags:
+        category = "text_only"
+    elif not allow_links:
+        category = "no_links"
+    elif slowmode_seconds > 0:
+        category = "slowmode"
+    else:
+        category = "standard"
+
+    if slowmode_seconds > 0:
+        reasons.append(f"Slowmode: {slowmode_seconds}s")
+    if not allow_links and "Rule: No Links" not in reasons:
+        reasons.append("Telegram Permission: Links Disabled")
+    if not allow_media:
+        reasons.append("Telegram Permission: Media Disabled")
+    if not allow_forwards and "Rule: No Forwarding" not in reasons:
+        reasons.append("Group Protection: Forwarding Restricted")
+
+    return {
+        "can_post": can_post,
+        "restriction_until": restriction_until,
+        "allow_forwards": allow_forwards,
+        "allow_links": allow_links,
+        "allow_media": allow_media,
+        "slowmode_seconds": slowmode_seconds,
+        "auto_tags": json.dumps(sorted(list(set(tags)))),
+        "category": category,
+        "rules_summary": " · ".join(reasons) if reasons else "All standard posts, forwards & premium emojis allowed",
+    }
+
+
+async def sync_account_destinations(account_id: int, deep_scan: bool = False) -> dict:
     """
     Syncs all joined Groups, Supergroups, Channels, and Forum Topics from Telegram.
-    Checks exact posting permissions (can_post), slowmode seconds, and temporary restrictions.
+    Also runs automatic permission + rule tag analysis.
     """
     client = await get_or_create_client(account_id)
     if not await client.is_user_authorized():
@@ -274,40 +406,42 @@ async def sync_account_destinations(account_id: int) -> dict:
         title = d.title or "Untitled"
         username = getattr(entity, "username", "") or ""
         participants = getattr(entity, "participants_count", 0) or 0
-        slowmode_seconds = getattr(entity, "slowmode_seconds", 0) or 0
-
-        # Check posting permission
-        can_post = 1
-        restriction_until = None
-
-        if getattr(entity, "broadcast", False) and not getattr(entity, "creator", False):
-            admin_rights = getattr(entity, "admin_rights", None)
-            if not admin_rights or not getattr(admin_rights, "post_messages", False):
-                can_post = 0
-
-        if getattr(entity, " restricted", False) or getattr(entity, " banned_rights", None):
-            banned_rights = getattr(entity, "banned_rights", None)
-            if banned_rights and getattr(banned_rights, "send_messages", False):
-                can_post = 0
-                until_date = getattr(banned_rights, "until_date", None)
-                if until_date and until_date.year < 2099:
-                    restriction_until = until_date.isoformat()
-
-        default_banned = getattr(entity, "default_banned_rights", None)
-        if default_banned and getattr(default_banned, "send_messages", False):
-            if not getattr(entity, "creator", False) and not getattr(entity, "admin_rights", None):
-                can_post = 0
-
         is_forum = getattr(entity, "forum", False)
         kind = "forum" if is_forum else ("channel" if getattr(entity, "broadcast", False) else "group")
 
-        # Upsert main group/channel
+        rule_text = title
+        if deep_scan:
+            # Fetch group description / about and latest pinned message for rule keywords
+            try:
+                if isinstance(entity, types.Channel):
+                    full = await client(functions.channels.GetFullChannelRequest(channel=entity))
+                    about = getattr(full.full_chat, "about", "") or ""
+                    rule_text += " " + about
+                elif isinstance(entity, types.Chat):
+                    full = await client(functions.messages.GetFullChatRequest(chat_id=entity.id))
+                    about = getattr(full.full_chat, "about", "") or ""
+                    rule_text += " " + about
+            except Exception:
+                pass
+            try:
+                pinned = await client.get_messages(
+                    entity, filter=types.InputMessagesFilterPinned(), limit=1
+                )
+                if pinned and len(pinned) > 0 and getattr(pinned[0], "message", None):
+                    rule_text += " " + pinned[0].message
+            except Exception:
+                pass
+            await asyncio.sleep(0.08)
+
+        analysis = analyze_entity_and_rules(entity, rule_text)
+
         conn.execute(
             """
             INSERT INTO destinations (
                 account_id, telegram_id, topic_id, title, parent_title, username,
-                kind, can_post, restriction_until, slowmode_seconds, participants_count, updated_at
-            ) VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                kind, can_post, restriction_until, slowmode_seconds, participants_count,
+                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, updated_at
+            ) VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id, telegram_id, topic_id) DO UPDATE SET
                 title=excluded.title,
                 username=excluded.username,
@@ -316,6 +450,12 @@ async def sync_account_destinations(account_id: int) -> dict:
                 restriction_until=excluded.restriction_until,
                 slowmode_seconds=excluded.slowmode_seconds,
                 participants_count=excluded.participants_count,
+                auto_tags=excluded.auto_tags,
+                category=excluded.category,
+                allow_forwards=excluded.allow_forwards,
+                allow_links=excluded.allow_links,
+                allow_media=excluded.allow_media,
+                rules_summary=excluded.rules_summary,
                 updated_at=excluded.updated_at
             """,
             (
@@ -324,17 +464,22 @@ async def sync_account_destinations(account_id: int) -> dict:
                 title,
                 username,
                 kind,
-                can_post,
-                restriction_until,
-                slowmode_seconds,
+                analysis["can_post"],
+                analysis["restriction_until"],
+                analysis["slowmode_seconds"],
                 participants,
+                analysis["auto_tags"],
+                analysis["category"],
+                analysis["allow_forwards"],
+                analysis["allow_links"],
+                analysis["allow_media"],
+                analysis["rules_summary"],
                 now_iso(),
             ),
         )
         synced_count += 1
 
-        # If it's a Forum Supergroup, also try fetching Forum Topics (like tele.khaimmo.shop)
-        if is_forum and can_post:
+        if is_forum and analysis["can_post"]:
             try:
                 res = await client(
                     functions.channels.GetForumTopicsRequest(
@@ -350,16 +495,24 @@ async def sync_account_destinations(account_id: int) -> dict:
                     topic_id = getattr(topic, "id", None)
                     topic_closed = getattr(topic, "closed", False)
                     if topic_title and topic_id:
+                        t_analysis = analyze_entity_and_rules(entity, rule_text + " " + topic_title)
                         conn.execute(
                             """
                             INSERT INTO destinations (
                                 account_id, telegram_id, topic_id, title, parent_title, username,
-                                kind, can_post, restriction_until, slowmode_seconds, participants_count, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, 'topic', ?, ?, ?, ?, ?)
+                                kind, can_post, restriction_until, slowmode_seconds, participants_count,
+                                auto_tags, category, allow_forwards, allow_links, allow_media, rules_summary, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, 'topic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT(account_id, telegram_id, topic_id) DO UPDATE SET
                                 title=excluded.title,
                                 parent_title=excluded.parent_title,
                                 can_post=excluded.can_post,
+                                auto_tags=excluded.auto_tags,
+                                category=excluded.category,
+                                allow_forwards=excluded.allow_forwards,
+                                allow_links=excluded.allow_links,
+                                allow_media=excluded.allow_media,
+                                rules_summary=excluded.rules_summary,
                                 updated_at=excluded.updated_at
                             """,
                             (
@@ -369,10 +522,16 @@ async def sync_account_destinations(account_id: int) -> dict:
                                 topic_title,
                                 title,
                                 username,
-                                0 if topic_closed else can_post,
-                                restriction_until,
-                                slowmode_seconds,
+                                0 if topic_closed else t_analysis["can_post"],
+                                t_analysis["restriction_until"],
+                                t_analysis["slowmode_seconds"],
                                 participants,
+                                t_analysis["auto_tags"],
+                                "restricted" if topic_closed else t_analysis["category"],
+                                t_analysis["allow_forwards"],
+                                t_analysis["allow_links"],
+                                t_analysis["allow_media"],
+                                t_analysis["rules_summary"],
                                 now_iso(),
                             ),
                         )
@@ -383,7 +542,7 @@ async def sync_account_destinations(account_id: int) -> dict:
     conn.execute("UPDATE accounts SET last_sync_at = ?, status = 'connected' WHERE id = ?", (now_iso(), account_id))
     conn.commit()
     conn.close()
-    return {"count": synced_count}
+    return {"count": synced_count, "deep_scan": deep_scan}
 
 
 async def fetch_saved_messages(account_id: int, limit: int = 25) -> list:
@@ -427,15 +586,32 @@ def reset_daily_quota_if_needed(conn, acc: dict) -> int:
     return acc["sent_today"]
 
 
+async def send_saved_message_as_clean_copy(client: TelegramClient, source_msg_id: int, target_peer: int, topic_id: Optional[int] = None):
+    """
+    Fetches the message from 'Saved Messages' ('me') and sends it as a brand new message
+    (preserving formatting entities, premium custom emojis, and media) WITHOUT the 'Forwarded from' header!
+    Used automatically for 'no_forward' groups.
+    """
+    src_msg = await client.get_messages("me", ids=int(source_msg_id))
+    if not src_msg:
+        raise ValueError(f"Saved message #{source_msg_id} not found in 'Saved Messages'")
+
+    sent = await client.send_message(
+        entity=target_peer,
+        message=src_msg.message or "",
+        file=src_msg.media,
+        formatting_entities=src_msg.entities,
+        reply_to=int(topic_id) if topic_id else None,
+    )
+    return sent.id if hasattr(sent, "id") else 0
+
+
 async def execute_campaign_round(campaign: dict):
     """
-    Executes 1 round of a campaign across its selected destinations with full Anti-Ban protection:
-    1. Checks account cooldown & daily quota
-    2. Pre-checks destination permission & temporary restrictions
-    3. Simulates typing action (if text template)
-    4. Uses Native Forward from 'me' (Saved Messages) OR Spintax text sending
-    5. Sleeps randomized jitter between groups (round_delay_min_seconds .. round_delay_max_seconds)
-    6. Catches FloodWait / SlowModeWait / WriteForbidden and updates DB automatically
+    Executes 1 round of a campaign across its selected destinations with full Anti-Ban & Category protection:
+    - Respects 24h_once category (skips if sent in the last 24 hours)
+    - Automatically switches to Clean Copy (Drop Author / No Forward Tag) if group is 'no_forward'
+    - Auto-learns if group rejects forwards and updates category to 'no_forward'
     """
     camp_id = campaign["id"]
     account_id = campaign["account_id"]
@@ -460,7 +636,6 @@ async def execute_campaign_round(campaign: dict):
     acc = dict(acc_row)
     tmpl = dict(tmpl_row)
 
-    # Check account cooldown
     if acc.get("cooldown_until"):
         cd_dt = datetime.fromisoformat(acc["cooldown_until"])
         if cd_dt > datetime.now(timezone.utc):
@@ -496,7 +671,6 @@ async def execute_campaign_round(campaign: dict):
     max_delay = max(min_delay, int(campaign["round_delay_max_seconds"]))
 
     for idx, dest_id in enumerate(dest_ids):
-        # Re-check if campaign was paused/stopped by user mid-round
         conn = get_conn()
         fresh_camp = conn.execute("SELECT status FROM campaigns WHERE id = ?", (camp_id,)).fetchone()
         dest_row = conn.execute("SELECT * FROM destinations WHERE id = ?", (dest_id,)).fetchone()
@@ -511,7 +685,6 @@ async def execute_campaign_round(campaign: dict):
             continue
         dest = dict(dest_row)
 
-        # Anti-Spam Check 1: Daily Quota Guard
         if sent_today >= int(acc_fresh["daily_quota"]):
             tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=0, minute=5, second=0)
             conn = get_conn()
@@ -523,7 +696,6 @@ async def execute_campaign_round(campaign: dict):
             conn.close()
             return
 
-        # Anti-Spam Check 2: Skip if no posting permission or temporarily restricted
         if not dest["can_post"]:
             log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "skipped", "No posting permission")
             continue
@@ -542,33 +714,73 @@ async def execute_campaign_round(campaign: dict):
                 )
                 continue
 
-        # Perform Send / Forward
+        # Anti-Spam Check: 24-Hour (1 Post/Day) Category Guard
+        dest_cat = dest.get("category") or "standard"
+        dest_tags = json.loads(dest.get("auto_tags") or "[]")
+        if (dest_cat == "24h_once" or "24h_once" in dest_tags) and dest.get("last_sent_at"):
+            try:
+                last_dt = datetime.fromisoformat(dest["last_sent_at"])
+                if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                    rem_hours = int((timedelta(hours=24) - (datetime.now(timezone.utc) - last_dt)).total_seconds() // 3600)
+                    log_delivery(
+                        camp_id,
+                        account_id,
+                        dest_id,
+                        dest["title"],
+                        next_round,
+                        "skipped",
+                        f"24h Rule Guard: Already posted today ({rem_hours}h remaining)",
+                    )
+                    continue
+            except Exception:
+                pass
+
         try:
             target_peer = int(dest["telegram_id"])
             topic_id = dest.get("topic_id")
+            delivery_note = "Delivered OK"
 
             if tmpl["mode"] == "forward" and tmpl.get("source_message_id"):
-                # Native Saved Messages Forwarding (Preserves premium emojis, media, formatting)
-                if topic_id:
-                    sent_msg = await client(
-                        functions.messages.ForwardMessagesRequest(
-                            from_peer="me",
-                            id=[int(tmpl["source_message_id"])],
-                            to_peer=target_peer,
-                            top_msg_id=int(topic_id),
-                            random_id=[random.randint(-2**63, 2**63 - 1)],
-                        )
+                # Check if group blocks forwards -> automatically send as clean copy without 'Forwarded from' tag!
+                if not dest.get("allow_forwards", 1) or dest_cat == "no_forward" or "no_forward" in dest_tags:
+                    msg_id = await send_saved_message_as_clean_copy(
+                        client, int(tmpl["source_message_id"]), target_peer, topic_id
                     )
-                    msg_id = getattr(sent_msg, "id", 0)
+                    delivery_note = "Sent as Clean Copy (No-Forward Rule Bypass)"
                 else:
-                    res = await client.forward_messages(
-                        entity=target_peer,
-                        messages=int(tmpl["source_message_id"]),
-                        from_peer="me",
-                    )
-                    msg_id = res.id if hasattr(res, "id") else 0
+                    try:
+                        if topic_id:
+                            sent_msg = await client(
+                                functions.messages.ForwardMessagesRequest(
+                                    from_peer="me",
+                                    id=[int(tmpl["source_message_id"])],
+                                    to_peer=target_peer,
+                                    top_msg_id=int(topic_id),
+                                    random_id=[random.randint(-2**63, 2**63 - 1)],
+                                )
+                            )
+                            msg_id = getattr(sent_msg, "id", 0)
+                        else:
+                            res = await client.forward_messages(
+                                entity=target_peer,
+                                messages=int(tmpl["source_message_id"]),
+                                from_peer="me",
+                            )
+                            msg_id = res.id if hasattr(res, "id") else 0
+                    except ChatForwardsRestrictedError:
+                        # Auto-learn that this group blocks forwards and fallback to Clean Copy!
+                        msg_id = await send_saved_message_as_clean_copy(
+                            client, int(tmpl["source_message_id"]), target_peer, topic_id
+                        )
+                        conn_learn = get_conn()
+                        conn_learn.execute(
+                            "UPDATE destinations SET allow_forwards = 0, category = 'no_forward' WHERE id = ?",
+                            (dest_id,),
+                        )
+                        conn_learn.commit()
+                        conn_learn.close()
+                        delivery_note = "Auto-Learned No-Forward -> Sent as Clean Copy"
             else:
-                # Text Template with Spintax + Optional Typing Simulation
                 final_text = parse_spintax(tmpl["content"])
                 if campaign.get("simulate_typing", 1):
                     try:
@@ -585,21 +797,20 @@ async def execute_campaign_round(campaign: dict):
                 )
                 msg_id = sent_msg.id
 
-            # Record Success
             conn = get_conn()
             conn.execute("UPDATE campaigns SET total_sent = total_sent + 1 WHERE id = ?", (camp_id,))
             conn.execute("UPDATE accounts SET sent_today = sent_today + 1 WHERE id = ?", (account_id,))
+            conn.execute("UPDATE destinations SET last_sent_at = ? WHERE id = ?", (now_iso(), dest_id))
             conn.commit()
             conn.close()
-            log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "sent", "Delivered OK", msg_id)
+            log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "sent", delivery_note, msg_id)
 
         except SlowModeWaitError as e:
-            # Group has slow mode active: set temporary restriction + 5-min safety buffer (like tele.khaimmo.shop)
             safe_until = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 300)
             conn = get_conn()
             conn.execute(
-                "UPDATE destinations SET restriction_until = ? WHERE id = ?",
-                (safe_until.isoformat(), dest_id),
+                "UPDATE destinations SET restriction_until = ?, category = CASE WHEN ? >= 3600 THEN '24h_once' ELSE 'slowmode' END WHERE id = ?",
+                (safe_until.isoformat(), e.seconds, dest_id),
             )
             conn.execute("UPDATE campaigns SET total_failed = total_failed + 1 WHERE id = ?", (camp_id,))
             conn.commit()
@@ -615,7 +826,6 @@ async def execute_campaign_round(campaign: dict):
             )
 
         except FloodWaitError as e:
-            # Account FloodWait: put account on cooldown + 5-min safety buffer
             safe_until = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 300)
             conn = get_conn()
             conn.execute(
@@ -644,9 +854,8 @@ async def execute_campaign_round(campaign: dict):
             return
 
         except (ChatWriteForbiddenError, UserBannedInChannelError, ChannelPrivateError, ChatAdminRequiredError) as e:
-            # Automatically mark group as can_post = 0 so we never spam a restricted group again!
             conn = get_conn()
-            conn.execute("UPDATE destinations SET can_post = 0 WHERE id = ?", (dest_id,))
+            conn.execute("UPDATE destinations SET can_post = 0, category = 'restricted' WHERE id = ?", (dest_id,))
             conn.execute("UPDATE campaigns SET total_failed = total_failed + 1 WHERE id = ?", (camp_id,))
             conn.commit()
             conn.close()
@@ -661,7 +870,6 @@ async def execute_campaign_round(campaign: dict):
             )
 
         except PeerFloodError:
-            # High-priority anti-ban protection: pause campaign for 6 hours if Telegram warns PeerFlood
             safe_until = datetime.now(timezone.utc) + timedelta(hours=6)
             conn = get_conn()
             conn.execute("UPDATE accounts SET cooldown_until = ? WHERE id = ?", (safe_until.isoformat(), account_id))
@@ -692,12 +900,10 @@ async def execute_campaign_round(campaign: dict):
             conn.close()
             log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "failed", str(e)[:200])
 
-        # Randomized Jitter Wait between groups in the same round
         if idx < len(dest_ids) - 1:
             jitter_sleep = random.uniform(min_delay, max_delay)
             await asyncio.sleep(jitter_sleep)
 
-    # Round finished — check if all repeats are done or schedule next round
     conn = get_conn()
     repeat_count = int(campaign["repeat_count"])
     if next_round >= repeat_count:
@@ -707,7 +913,6 @@ async def execute_campaign_round(campaign: dict):
         )
     else:
         group_interval = max(10, int(campaign["group_interval_seconds"]))
-        # Add subtle random jitter (+0 to +15s) to round interval too
         next_run = datetime.now(timezone.utc) + timedelta(seconds=group_interval + random.randint(2, 15))
         conn.execute(
             "UPDATE campaigns SET current_round = ?, next_run_at = ? WHERE id = ?",
@@ -769,7 +974,6 @@ async def campaign_scheduler_loop():
                 if cid in RUNNING_CAMPAIGN_TASKS and not RUNNING_CAMPAIGN_TASKS[cid].done():
                     continue
 
-                # Check scheduled_at
                 if camp.get("scheduled_at"):
                     try:
                         sched_dt = datetime.fromisoformat(camp["scheduled_at"].replace("Z", "+00:00"))
@@ -780,7 +984,6 @@ async def campaign_scheduler_loop():
                     except Exception:
                         pass
 
-                # Check next_run_at
                 if camp.get("next_run_at"):
                     try:
                         next_dt = datetime.fromisoformat(camp["next_run_at"].replace("Z", "+00:00"))
