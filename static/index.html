@@ -438,15 +438,16 @@
           <div>
             <label class="block font-bold mb-1">Select Source Telegram Account</label>
             <div class="flex gap-2">
-              <select id="tmpl-src-acc" class="flex-1 h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold"></select>
-              <button type="button" onclick="loadSavedMessagesForTemplate()" class="px-3 py-2 rounded-xl bg-[#1a2b88] text-white font-bold">Load Saved Messages</button>
+              <select id="tmpl-src-acc" onchange="loadSavedMessagesForTemplate()" class="flex-1 h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold"></select>
+              <button type="button" onclick="loadSavedMessagesForTemplate()" class="px-3 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white font-bold">Refresh Saved Messages</button>
             </div>
           </div>
           <div>
-            <label class="block font-bold mb-1">Pick Message from 'Saved Messages'</label>
-            <select id="tmpl-src-msg" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold">
-              <option value="">Click 'Load Saved Messages' first...</option>
+            <label class="block font-bold mb-1">Pick Message from 'Saved Messages' (All Forwarded & Direct Posts)</label>
+            <select id="tmpl-src-msg" onchange="highlightSelectedSavedCard(this.value)" class="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white font-semibold mb-2">
+              <option value="">Loading Saved Messages...</option>
             </select>
+            <div id="tmpl-saved-cards" class="max-h-52 overflow-y-auto space-y-2 pr-1"></div>
           </div>
         </div>
 
@@ -1038,6 +1039,9 @@
         : `<option value="">No connected account available</option>`;
       toggleTemplateMode();
       openModal('modal-template');
+      if (connected.length) {
+        loadSavedMessagesForTemplate();
+      }
     }
 
     function toggleTemplateMode() {
@@ -1046,16 +1050,66 @@
       document.getElementById('tmpl-text-box').classList.toggle('hidden', mode !== 'text');
     }
 
+    function selectSavedMessageCard(msgId) {
+      const sel = document.getElementById('tmpl-src-msg');
+      sel.value = String(msgId);
+      highlightSelectedSavedCard(msgId);
+    }
+
+    function highlightSelectedSavedCard(msgId) {
+      document.querySelectorAll('.saved-msg-card').forEach(el => {
+        if (el.getAttribute('data-id') === String(msgId)) {
+          el.classList.add('border-[#1a2b88]', 'bg-blue-50/50', 'ring-2', 'ring-[#1a2b88]/20');
+        } else {
+          el.classList.remove('border-[#1a2b88]', 'bg-blue-50/50', 'ring-2', 'ring-[#1a2b88]/20');
+        }
+      });
+    }
+
     async function loadSavedMessagesForTemplate() {
       const accId = document.getElementById('tmpl-src-acc').value;
-      if (!accId) return alert('Select a connected Telegram account first');
+      if (!accId) return;
       const sel = document.getElementById('tmpl-src-msg');
+      const cardsBox = document.getElementById('tmpl-saved-cards');
       sel.innerHTML = `<option value="">Loading Saved Messages from Telegram...</option>`;
+      if (cardsBox) cardsBox.innerHTML = `<div class="p-3 text-center text-slate-400">Fetching all forwarded & direct messages from Saved Messages...</div>`;
       try {
-        const msgs = await api(`/api/telegram/accounts/${accId}/saved-messages`);
-        sel.innerHTML = msgs.length
-          ? msgs.map(m => `<option value="${m.id}" data-text="${encodeURIComponent(m.text)}">[#${m.id} · ${m.media_type.toUpperCase()}] ${m.text.slice(0, 80)}</option>`).join('')
-          : `<option value="">No messages found in your 'Saved Messages' chat!</option>`;
+        const msgs = await api(`/api/telegram/accounts/${accId}/saved-messages?t=${Date.now()}`);
+        if (!msgs.length) {
+          sel.innerHTML = `<option value="">No messages found in your 'Saved Messages' chat!</option>`;
+          if (cardsBox) cardsBox.innerHTML = `<div class="p-3 text-center text-rose-500">No messages found in Saved Messages. Forward or send a message to Saved Messages in Telegram and click Refresh.</div>`;
+          return;
+        }
+        sel.innerHTML = msgs.map(m => {
+          const fwdLabel = m.is_forwarded ? `[FWD${m.forwarded_from ? ': ' + m.forwarded_from : ''}] ` : '';
+          const emojiLabel = m.custom_emoji_count ? `[${m.custom_emoji_count} Premium Emojis] ` : '';
+          const cleanPreview = (m.text || '').replace(/\s+/g, ' ').slice(0, 75);
+          return `<option value="${m.id}" data-text="${encodeURIComponent(m.text)}">[#${m.id}] ${fwdLabel}${emojiLabel}${cleanPreview}</option>`;
+        }).join('');
+
+        if (cardsBox) {
+          cardsBox.innerHTML = msgs.map((m, i) => `
+            <div onclick="selectSavedMessageCard(${m.id})" data-id="${m.id}" class="saved-msg-card cursor-pointer p-2.5 rounded-xl border border-slate-200 bg-white hover:border-[#1a2b88] transition ${i === 0 ? 'border-[#1a2b88] bg-blue-50/50 ring-2 ring-[#1a2b88]/20' : ''}">
+              <div class="flex items-center justify-between gap-1.5 flex-wrap mb-1">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="font-extrabold text-[11px] text-slate-900">#${m.id}</span>
+                  ${m.is_forwarded
+                    ? `<span class="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[10px] font-bold">Forwarded${m.forwarded_from ? ' · ' + m.forwarded_from : ''}</span>`
+                    : `<span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-bold">Direct Saved</span>`}
+                  ${m.custom_emoji_count
+                    ? `<span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">${m.custom_emoji_count} Premium Emojis</span>`
+                    : ''}
+                  ${m.is_pinned
+                    ? `<span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">Pinned</span>`
+                    : ''}
+                  <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase">${m.media_type}</span>
+                </div>
+                <span class="text-[10px] text-slate-400">${m.date ? new Date(m.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</span>
+              </div>
+              <div class="text-[11px] text-slate-700 whitespace-pre-wrap line-clamp-3 font-medium">${(m.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            </div>
+          `).join('');
+        }
       } catch (e) {
         alert(e.message);
       }

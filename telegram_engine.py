@@ -749,30 +749,137 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     return {"count": synced_count, "deep_scan": deep_scan, "folders_detected": len(folder_map)}
 
 
-async def fetch_saved_messages(account_id: int, limit: int = 25) -> list:
-    """Fetches recent messages from 'Saved Messages' ('me') for forward campaigns."""
+async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
+    """
+    Fetches all recent AND pinned messages from 'Saved Messages' ('me' / InputPeerSelf),
+    including forwarded messages (from channels, groups, bots, or users), direct messages,
+    custom/premium emoji messages, and media messages.
+    """
     client = await get_or_create_client(account_id)
     if not await client.is_user_authorized():
         raise ValueError("Account is not connected")
 
-    messages = await client.get_messages("me", limit=limit)
+    peer_map: Dict[int, str] = {}
+    raw_messages = []
+    seen_ids = set()
+
+    # 1. Fetch fresh un-cached history directly from InputPeerSelf
+    try:
+        hist = await client(
+            functions.messages.GetHistoryRequest(
+                peer=types.InputPeerSelf(),
+                offset_id=0,
+                offset_date=None,
+                add_offset=0,
+                limit=limit,
+                max_id=0,
+                min_id=0,
+                hash=0,
+            )
+        )
+        for c in getattr(hist, "chats", []) or []:
+            cid = getattr(c, "id", None)
+            ctitle = getattr(c, "title", None)
+            if cid and ctitle:
+                peer_map[int(cid)] = str(ctitle)
+        for u in getattr(hist, "users", []) or []:
+            uid = getattr(u, "id", None)
+            uname = f"{getattr(u, 'first_name', '') or ''} {getattr(u, 'last_name', '') or ''}".strip() or getattr(u, "username", "")
+            if uid and uname:
+                peer_map[int(uid)] = str(uname)
+        for m in getattr(hist, "messages", []) or []:
+            if hasattr(m, "id") and m.id not in seen_ids:
+                seen_ids.add(m.id)
+                raw_messages.append(m)
+    except Exception:
+        pass
+
+    # 2. Also fetch via client.get_messages("me") and Pinned messages in Saved Messages
+    try:
+        std_msgs = await client.get_messages(types.InputPeerSelf(), limit=limit)
+        for m in std_msgs or []:
+            if hasattr(m, "id") and m.id not in seen_ids:
+                seen_ids.add(m.id)
+                raw_messages.append(m)
+    except Exception:
+        pass
+
+    try:
+        pinned_msgs = await client.get_messages(
+            types.InputPeerSelf(), filter=types.InputMessagesFilterPinned(), limit=30
+        )
+        for m in pinned_msgs or []:
+            if hasattr(m, "id") and m.id not in seen_ids:
+                seen_ids.add(m.id)
+                raw_messages.append(m)
+    except Exception:
+        pass
+
+    # Sort newest first (pinned or highest ID first)
+    raw_messages.sort(key=lambda x: getattr(x, "id", 0), reverse=True)
+
     results = []
-    for m in messages:
-        if not m.message and not m.media:
+    for m in raw_messages:
+        if isinstance(m, types.MessageEmpty) or getattr(m, "action", None):
             continue
+
+        msg_text = getattr(m, "message", None) or getattr(m, "raw_text", None) or ""
+        fwd = getattr(m, "fwd_from", None)
+        media = getattr(m, "media", None)
+
+        if not msg_text and not media and not fwd:
+            continue
+
+        # Detect forwarded source name
+        is_forwarded = bool(fwd)
+        forwarded_from = ""
+        if fwd:
+            if getattr(fwd, "from_name", None):
+                forwarded_from = str(fwd.from_name)
+            elif getattr(fwd, "from_id", None):
+                fid_obj = fwd.from_id
+                raw_fid = (
+                    getattr(fid_obj, "channel_id", None)
+                    or getattr(fid_obj, "chat_id", None)
+                    or getattr(fid_obj, "user_id", None)
+                )
+                if raw_fid and int(raw_fid) in peer_map:
+                    forwarded_from = peer_map[int(raw_fid)]
+                else:
+                    forwarded_from = "Forwarded Chat"
+
         media_type = "text"
-        if m.photo:
+        if getattr(m, "photo", None) or isinstance(media, types.MessageMediaPhoto):
             media_type = "photo"
-        elif m.video:
+        elif getattr(m, "video", None):
             media_type = "video"
-        elif m.document:
+        elif getattr(m, "document", None) or isinstance(media, types.MessageMediaDocument):
             media_type = "document"
+        elif isinstance(media, types.MessageMediaWebPage):
+            media_type = "webpage"
+
+        entities = getattr(m, "entities", None) or []
+        custom_emoji_count = sum(1 for e in entities if isinstance(e, types.MessageEntityCustomEmoji))
+        is_pinned = bool(getattr(m, "pinned", False))
+
+        display_text = msg_text.strip()
+        if not display_text:
+            if forwarded_from:
+                display_text = f"[Forwarded from {forwarded_from}] ({media_type.upper()})"
+            else:
+                display_text = f"[{media_type.upper()} Message #{m.id}]"
+
+        dt_obj = getattr(m, "date", None)
         results.append(
             {
                 "id": m.id,
-                "text": (m.message or f"[{media_type.upper()} Media Message]")[:300],
+                "text": display_text[:600],
                 "media_type": media_type,
-                "date": m.date.isoformat() if m.date else "",
+                "is_forwarded": is_forwarded,
+                "forwarded_from": forwarded_from,
+                "is_pinned": is_pinned,
+                "custom_emoji_count": custom_emoji_count,
+                "date": dt_obj.isoformat() if dt_obj else "",
             }
         )
     return results
