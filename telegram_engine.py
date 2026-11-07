@@ -1199,26 +1199,62 @@ async def send_saved_message_as_clean_copy(
     target_peer: int,
     topic_id: Optional[int] = None,
     strip_custom_emoji: bool = False,
+    allow_media: bool = True,
 ):
     """
-    Fetches the message from 'Saved Messages' ('me') and sends it as a brand new message
-    WITHOUT the 'Forwarded from' header!
-    If strip_custom_emoji=True (for 'Withut emji ❌' / 'text_only' groups), strips
-    MessageEntityCustomEmoji so premium emojis automatically fall back to normal standard emojis.
+    Fetches the message from 'Saved Messages' ('me') and sends it WITHOUT the 'Forwarded from' header!
+    - If strip_custom_emoji=False (No-Forward groups that allow Premium Emojis): uses Telegram's native
+      drop_author=True forward (or clean send_message fallback) so the 'Forwarded from' tag is 100% removed
+      while keeping Premium Emojis intact.
+    - If strip_custom_emoji=True ('Withut emji ❌' / 'No Emoji / Text Only' groups): strips all
+      MessageEntityCustomEmoji so premium emojis automatically fall back to normal standard emojis / plain text,
+      and also sends without the 'Forwarded from' header.
     """
+    if not strip_custom_emoji:
+        try:
+            req_kwargs = {
+                "from_peer": "me",
+                "id": [int(source_msg_id)],
+                "to_peer": target_peer,
+                "drop_author": True,
+                "random_id": [random.randint(-2**63, 2**63 - 1)],
+            }
+            if topic_id and int(topic_id) > 0:
+                req_kwargs["top_msg_id"] = int(topic_id)
+            sent_upd = await client(functions.messages.ForwardMessagesRequest(**req_kwargs))
+            msg_id = getattr(sent_upd, "id", 0)
+            if not msg_id and hasattr(sent_upd, "updates"):
+                for upd in getattr(sent_upd, "updates", []) or []:
+                    if hasattr(upd, "message") and hasattr(upd.message, "id"):
+                        msg_id = upd.message.id
+                        break
+                    elif hasattr(upd, "id") and isinstance(upd.id, int):
+                        msg_id = upd.id
+                        break
+            if msg_id:
+                return msg_id
+        except Exception:
+            pass
+
     src_msg = await client.get_messages("me", ids=int(source_msg_id))
     if not src_msg:
         raise ValueError(f"Saved message #{source_msg_id} not found in 'Saved Messages'")
 
-    entities = src_msg.entities
+    entities = list(src_msg.entities or [])
     if strip_custom_emoji and entities:
         entities = [e for e in entities if not isinstance(e, types.MessageEntityCustomEmoji)]
+
+    media_file = None
+    if allow_media and not strip_custom_emoji and src_msg.media:
+        if not isinstance(src_msg.media, types.MessageMediaWebPage):
+            media_file = src_msg.media
 
     sent = await client.send_message(
         entity=target_peer,
         message=src_msg.message or "",
-        file=src_msg.media,
-        formatting_entities=entities,
+        file=media_file,
+        formatting_entities=entities if entities else None,
+        link_preview=False,
         reply_to=int(topic_id) if (topic_id and int(topic_id) > 0) else None,
     )
     return sent.id if hasattr(sent, "id") else 0
@@ -1393,9 +1429,10 @@ async def execute_campaign_round(campaign: dict):
                         target_peer,
                         topic_id,
                         strip_custom_emoji=strip_emoji,
+                        allow_media=bool(dest.get("allow_media", 1)),
                     )
                     if strip_emoji:
-                        delivery_note = "Sent without Premium Emojis (Clean Copy)"
+                        delivery_note = "Sent without Premium Emojis & without Forward Tag (Clean Copy)"
                     else:
                         delivery_note = "Sent as Clean Copy (No-Forward Rule Bypass)"
                 else:
@@ -1434,6 +1471,7 @@ async def execute_campaign_round(campaign: dict):
                             target_peer,
                             topic_id,
                             strip_custom_emoji=strip_emoji,
+                            allow_media=bool(dest.get("allow_media", 1)),
                         )
                         conn_learn = get_conn()
                         conn_learn.execute(
