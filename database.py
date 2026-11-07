@@ -73,6 +73,9 @@ def init_db():
         allow_media INTEGER DEFAULT 1,
         rules_summary TEXT DEFAULT '',
         folder_name TEXT DEFAULT '',
+        is_enabled INTEGER NOT NULL DEFAULT 1,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        user_modified_category INTEGER NOT NULL DEFAULT 0,
         last_sent_at TEXT DEFAULT NULL,
         updated_at TEXT,
         UNIQUE(account_id, telegram_id, topic_id)
@@ -89,6 +92,9 @@ def init_db():
         "allow_media": "INTEGER DEFAULT 1",
         "rules_summary": "TEXT DEFAULT ''",
         "folder_name": "TEXT DEFAULT ''",
+        "is_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+        "user_modified_category": "INTEGER NOT NULL DEFAULT 0",
         "last_sent_at": "TEXT DEFAULT NULL",
     }
     for col, col_def in migrations.items():

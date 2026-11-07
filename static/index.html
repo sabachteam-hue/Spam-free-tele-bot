@@ -249,10 +249,15 @@
               <option value="no_links">No Links Allowed</option>
               <option value="text_only">No Premium Emoji / Text Only</option>
               <option value="restricted">Restricted (Cannot Post)</option>
+              <option value="disabled">Disabled Groups Only</option>
             </select>
           </div>
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2.5 flex-wrap">
             <span id="group-count-badge" class="text-xs font-bold text-slate-500">0 groups shown</span>
+            <button onclick="removeAllRestrictedGroups()" class="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              <span>Remove Restricted</span>
+            </button>
             <button onclick="runDeepAutoScan(this)" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white text-xs font-bold shadow transition">
               <i data-lucide="radar" class="w-4 h-4"></i>
               <span>Auto-Scan Group Rules & Assign Tags</span>
@@ -269,6 +274,7 @@
                 <th class="p-3 font-bold">Slowmode</th>
                 <th class="p-3 font-bold">Distribution Category (Editable)</th>
                 <th class="p-3 font-bold">Posting Status</th>
+                <th class="p-3 font-bold text-right">Enable / Delete</th>
               </tr>
             </thead>
             <tbody id="groups-table-body" class="divide-y divide-slate-100"></tbody>
@@ -959,6 +965,41 @@
       }
     }
 
+    async function toggleGroupEnabled(destId, newEnabled) {
+      try {
+        await api(`/api/destinations/${destId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ is_enabled: newEnabled ? 1 : 0 })
+        });
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function deleteGroupPermanently(destId, title) {
+      if (!confirm(`Remove "${title}" permanently from list? (It will NOT come back even when you Sync again)`)) return;
+      try {
+        await api(`/api/destinations/${destId}`, { method: 'DELETE' });
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function removeAllRestrictedGroups() {
+      if (!confirm('Remove all Restricted / Cannot Post groups permanently from your list? (They will not come back on future syncs)')) return;
+      try {
+        await api('/api/destinations/bulk-action', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'delete_restricted', ids: [] })
+        });
+        refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
     function renderTagBadges(tags) {
       if (!tags || !tags.length) return '';
       return tags.map(t => {
@@ -983,6 +1024,8 @@
       const catFilter = document.getElementById('group-filter-cat')?.value || 'all';
 
       const filtered = STATE.destinations.filter(d => {
+        const isEnabled = d.is_enabled !== 0;
+        if (catFilter === 'disabled') return !isEnabled;
         const cat = d.category || (d.can_post ? 'standard' : 'restricted');
         const tags = d.auto_tags || [];
         if (catFilter !== 'all' && cat !== catFilter && !tags.includes(catFilter)) return false;
@@ -994,13 +1037,16 @@
       const tbody = document.getElementById('groups-table-body');
       tbody.innerHTML = filtered.length ? filtered.map(d => {
         const currentCat = d.category || (d.can_post ? 'standard' : 'restricted');
+        const isEnabled = d.is_enabled !== 0;
+        const safeTitle = (d.title || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
         return `
-        <tr class="hover:bg-slate-50">
+        <tr class="hover:bg-slate-50 ${!isEnabled ? 'opacity-60 bg-slate-50/70' : ''}">
           <td class="p-3">
             <div class="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
               <span>${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}</span>
               ${d.username ? `<span class="text-slate-400 font-normal">@${d.username}</span>` : ''}
               ${d.folder_name ? `<span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">Folder: ${d.folder_name}</span>` : ''}
+              ${!isEnabled ? `<span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold uppercase">Disabled</span>` : ''}
             </div>
             <div class="text-[10px] text-slate-400 uppercase font-semibold mt-0.5">${d.kind} · Account: ${d.account_name || '-'}</div>
           </td>
@@ -1021,13 +1067,23 @@
             </select>
           </td>
           <td class="p-3">
-            ${d.can_post
-              ? `<span class="badge-green px-2.5 py-0.5 rounded-full text-[11px] font-bold">Can Post</span>`
-              : `<span class="badge-red px-2.5 py-0.5 rounded-full text-[11px] font-bold">Restricted</span>`}
+            ${!isEnabled
+              ? `<span class="badge-amber px-2.5 py-0.5 rounded-full text-[11px] font-bold">Disabled</span>`
+              : (d.can_post
+                  ? `<span class="badge-green px-2.5 py-0.5 rounded-full text-[11px] font-bold">Can Post</span>`
+                  : `<span class="badge-red px-2.5 py-0.5 rounded-full text-[11px] font-bold">Restricted</span>`)}
             ${d.restriction_until ? `<span class="text-[10px] text-amber-700 block mt-0.5">Until ${new Date(d.restriction_until).toLocaleTimeString()}</span>` : ''}
           </td>
+          <td class="p-3 text-right">
+            <div class="inline-flex items-center gap-1.5">
+              ${isEnabled
+                ? `<button onclick="toggleGroupEnabled(${d.id}, false)" class="px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-amber-100 text-emerald-800 hover:text-amber-900 text-[11px] font-bold transition" title="Click to Disable Group">Enabled</button>`
+                : `<button onclick="toggleGroupEnabled(${d.id}, true)" class="px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-emerald-100 text-slate-700 hover:text-emerald-800 text-[11px] font-bold transition" title="Click to Enable Group">Disabled</button>`}
+              <button onclick="deleteGroupPermanently(${d.id}, '${safeTitle}')" class="px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white text-[11px] font-bold transition" title="Permanently remove group (won't return on sync)">Delete</button>
+            </div>
+          </td>
         </tr>
-      `}).join('') : `<tr><td colspan="5" class="p-6 text-center text-slate-400">No matching groups found.</td></tr>`;
+      `}).join('') : `<tr><td colspan="6" class="p-6 text-center text-slate-400">No matching groups found.</td></tr>`;
     }
 
     // ==================== TEMPLATES ====================
@@ -1207,7 +1263,7 @@
 
     function selectCampaignCategory(catType) {
       const accId = Number(document.getElementById('camp-account').value);
-      const writable = STATE.destinations.filter(d => d.account_id === accId && d.can_post);
+      const writable = STATE.destinations.filter(d => d.account_id === accId && d.can_post && d.is_enabled !== 0);
       STATE.selectedCampaignDestinations.clear();
       if (catType === 'all_writable') {
         writable.forEach(d => STATE.selectedCampaignDestinations.add(d.id));
@@ -1235,20 +1291,24 @@
         return;
       }
       box.innerHTML = groups.map(g => {
+        const isEnabled = g.is_enabled !== 0;
+        const canSelect = g.can_post && isEnabled;
         const checked = STATE.selectedCampaignDestinations.has(g.id) ? 'checked' : '';
-        const disabled = !g.can_post ? 'disabled' : '';
+        const disabled = !canSelect ? 'disabled' : '';
         const cat = g.category || 'standard';
         const catInfo = TAG_LABELS[cat] || { label: cat, cls: 'badge-slate' };
         return `
-          <label class="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 ${!g.can_post ? 'opacity-50' : 'cursor-pointer'}">
+          <label class="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 ${!canSelect ? 'opacity-50' : 'cursor-pointer'}">
             <div class="flex items-center gap-2.5">
               <input type="checkbox" ${checked} ${disabled} onchange="toggleCampaignDest(${g.id}, this.checked)" class="w-4 h-4 rounded" />
               <span class="font-semibold text-slate-800">${g.parent_title ? `<span class="text-slate-400">${g.parent_title} › </span>` : ''}${g.title}</span>
               <span class="px-2 py-0.5 rounded text-[10px] font-bold ${catInfo.cls}">${catInfo.label}</span>
             </div>
-            ${g.can_post
-              ? `<span class="text-[10px] font-bold text-emerald-600">Can post</span>`
-              : `<span class="text-[10px] font-bold text-rose-600">Restricted</span>`}
+            ${!isEnabled
+              ? `<span class="text-[10px] font-bold text-amber-600">Disabled</span>`
+              : (g.can_post
+                  ? `<span class="text-[10px] font-bold text-emerald-600">Can post</span>`
+                  : `<span class="text-[10px] font-bold text-rose-600">Restricted</span>`)}
           </label>
         `;
       }).join('');

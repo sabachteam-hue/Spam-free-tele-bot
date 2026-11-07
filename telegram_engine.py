@@ -532,8 +532,25 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
     # 1. Fetch user's Telegram Chat Folders (e.g. 'Withut emji ❌', 'Dnt forwrd ❌', 'Groups')
     folder_map = await fetch_telegram_folder_map(client)
 
+    conn_pre = get_conn()
+    deleted_main_ids = {
+        int(r[0])
+        for r in conn_pre.execute(
+            "SELECT telegram_id FROM destinations WHERE account_id = ? AND COALESCE(topic_id, 0) = 0 AND COALESCE(is_deleted, 0) = 1",
+            (account_id,),
+        ).fetchall()
+    }
+    deleted_topic_pairs = {
+        (int(r[0]), int(r[1]))
+        for r in conn_pre.execute(
+            "SELECT telegram_id, COALESCE(topic_id, 0) FROM destinations WHERE account_id = ? AND COALESCE(is_deleted, 0) = 1",
+            (account_id,),
+        ).fetchall()
+    }
+    conn_pre.close()
+
     dialogs = await client.get_dialogs(limit=None)
-    group_dialogs = [d for d in dialogs if (d.is_group or d.is_channel)]
+    group_dialogs = [d for d in dialogs if (d.is_group or d.is_channel) and int(d.id) not in deleted_main_ids]
 
     # 2. Deep-scan group description, pinned rules, AND recent moderation bot messages/warnings concurrently
     extra_rules: Dict[int, str] = {}
@@ -651,8 +668,8 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 slowmode_seconds=excluded.slowmode_seconds,
                 participants_count=excluded.participants_count,
                 auto_tags=excluded.auto_tags,
-                category=excluded.category,
-                allow_forwards=excluded.allow_forwards,
+                category=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.category ELSE excluded.category END,
+                allow_forwards=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.allow_forwards ELSE excluded.allow_forwards END,
                 allow_links=excluded.allow_links,
                 allow_media=excluded.allow_media,
                 rules_summary=excluded.rules_summary,
@@ -696,7 +713,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                     topic_title = getattr(topic, "title", None)
                     topic_id = getattr(topic, "id", None)
                     topic_closed = getattr(topic, "closed", False)
-                    if topic_title and topic_id:
+                    if topic_title and topic_id and (int(d.id), int(topic_id)) not in deleted_topic_pairs:
                         t_analysis = analyze_entity_and_rules(entity, rule_text + " " + topic_title, folders)
                         conn.execute(
                             """
@@ -710,8 +727,8 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                                 parent_title=excluded.parent_title,
                                 can_post=excluded.can_post,
                                 auto_tags=excluded.auto_tags,
-                                category=excluded.category,
-                                allow_forwards=excluded.allow_forwards,
+                                category=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.category ELSE excluded.category END,
+                                allow_forwards=CASE WHEN COALESCE(destinations.user_modified_category, 0) = 1 THEN destinations.allow_forwards ELSE excluded.allow_forwards END,
                                 allow_links=excluded.allow_links,
                                 allow_media=excluded.allow_media,
                                 rules_summary=excluded.rules_summary,
@@ -1017,6 +1034,10 @@ async def execute_campaign_round(campaign: dict):
             conn.commit()
             conn.close()
             return
+
+        if dest.get("is_deleted", 0) or not dest.get("is_enabled", 1):
+            log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "skipped", "Disabled or removed by user")
+            continue
 
         if not dest["can_post"]:
             log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "skipped", "No posting permission")

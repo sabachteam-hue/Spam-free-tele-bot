@@ -96,8 +96,14 @@ class CampaignStatusUpdate(BaseModel):
 
 
 class DestinationCategoryUpdate(BaseModel):
-    category: str
+    category: Optional[str] = None
     allow_forwards: Optional[int] = None
+    is_enabled: Optional[int] = None
+
+
+class DestinationBulkAction(BaseModel):
+    action: str
+    ids: List[int] = []
 
 
 # ==================== DASHBOARD OVERVIEW ====================
@@ -111,8 +117,10 @@ async def get_dashboard():
     conn = get_conn()
     accounts_total = conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
     accounts_connected = conn.execute("SELECT COUNT(*) FROM accounts WHERE status = 'connected'").fetchone()[0]
-    groups_total = conn.execute("SELECT COUNT(*) FROM destinations").fetchone()[0]
-    groups_can_post = conn.execute("SELECT COUNT(*) FROM destinations WHERE can_post = 1").fetchone()[0]
+    groups_total = conn.execute("SELECT COUNT(*) FROM destinations WHERE COALESCE(is_deleted, 0) = 0").fetchone()[0]
+    groups_can_post = conn.execute(
+        "SELECT COUNT(*) FROM destinations WHERE COALESCE(is_deleted, 0) = 0 AND COALESCE(is_enabled, 1) = 1 AND can_post = 1"
+    ).fetchone()[0]
     campaigns_running = conn.execute("SELECT COUNT(*) FROM campaigns WHERE status = 'running'").fetchone()[0]
     campaigns_total = conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
     sent_total = conn.execute("SELECT COALESCE(SUM(total_sent), 0) FROM campaigns").fetchone()[0]
@@ -142,8 +150,8 @@ async def list_accounts():
     rows = conn.execute(
         """
         SELECT a.*, p.name as proxy_name, p.host as proxy_host, p.port as proxy_port,
-        (SELECT COUNT(*) FROM destinations d WHERE d.account_id = a.id) as group_count,
-        (SELECT COUNT(*) FROM destinations d WHERE d.account_id = a.id AND d.can_post = 1) as writable_group_count
+        (SELECT COUNT(*) FROM destinations d WHERE d.account_id = a.id AND COALESCE(d.is_deleted, 0) = 0) as group_count,
+        (SELECT COUNT(*) FROM destinations d WHERE d.account_id = a.id AND COALESCE(d.is_deleted, 0) = 0 AND COALESCE(d.is_enabled, 1) = 1 AND d.can_post = 1) as writable_group_count
         FROM accounts a
         LEFT JOIN proxies p ON a.proxy_id = p.id
         ORDER BY a.id DESC
@@ -266,14 +274,60 @@ async def auto_scan_all_destinations():
 @app.patch("/api/destinations/{dest_id}")
 async def update_destination_category(dest_id: int, payload: DestinationCategoryUpdate):
     conn = get_conn()
-    allow_fwd = 0 if payload.category == "no_forward" else (payload.allow_forwards if payload.allow_forwards is not None else 1)
-    conn.execute(
-        "UPDATE destinations SET category = ?, allow_forwards = ? WHERE id = ?",
-        (payload.category, allow_fwd, dest_id),
-    )
+    if payload.category is not None:
+        allow_fwd = 0 if payload.category == "no_forward" else (payload.allow_forwards if payload.allow_forwards is not None else 1)
+        conn.execute(
+            "UPDATE destinations SET category = ?, allow_forwards = ?, user_modified_category = 1 WHERE id = ?",
+            (payload.category, allow_fwd, dest_id),
+        )
+    if payload.is_enabled is not None:
+        conn.execute(
+            "UPDATE destinations SET is_enabled = ? WHERE id = ?",
+            (int(payload.is_enabled), dest_id),
+        )
     conn.commit()
     conn.close()
-    return {"id": dest_id, "category": payload.category}
+    return {"id": dest_id, "category": payload.category, "is_enabled": payload.is_enabled}
+
+
+@app.delete("/api/destinations/{dest_id}")
+async def delete_destination_permanently(dest_id: int):
+    """
+    Soft-deletes a group/topic (sets is_deleted = 1, is_enabled = 0) so it is removed from the list
+    and NEVER re-added even when the user clicks Sync or Auto-Scan in the future.
+    """
+    conn = get_conn()
+    row = conn.execute("SELECT account_id, telegram_id, COALESCE(topic_id, 0) as topic_id FROM destinations WHERE id = ?", (dest_id,)).fetchone()
+    if row:
+        conn.execute("UPDATE destinations SET is_deleted = 1, is_enabled = 0 WHERE id = ?", (dest_id,))
+        if int(row["topic_id"]) == 0:
+            conn.execute(
+                "UPDATE destinations SET is_deleted = 1, is_enabled = 0 WHERE account_id = ? AND telegram_id = ?",
+                (row["account_id"], row["telegram_id"]),
+            )
+    conn.commit()
+    conn.close()
+    return {"deleted": True, "id": dest_id}
+
+
+@app.post("/api/destinations/bulk-action")
+async def bulk_destination_action(payload: DestinationBulkAction):
+    conn = get_conn()
+    act = payload.action
+    ids = payload.ids or []
+    if act == "delete_restricted":
+        conn.execute("UPDATE destinations SET is_deleted = 1, is_enabled = 0 WHERE can_post = 0 OR category = 'restricted'")
+    elif ids:
+        placeholders = ",".join("?" for _ in ids)
+        if act == "enable":
+            conn.execute(f"UPDATE destinations SET is_enabled = 1 WHERE id IN ({placeholders})", ids)
+        elif act == "disable":
+            conn.execute(f"UPDATE destinations SET is_enabled = 0 WHERE id IN ({placeholders})", ids)
+        elif act == "delete":
+            conn.execute(f"UPDATE destinations SET is_deleted = 1, is_enabled = 0 WHERE id IN ({placeholders})", ids)
+    conn.commit()
+    conn.close()
+    return {"ok": True, "action": act}
 
 
 @app.get("/api/telegram/accounts/{account_id}/saved-messages")
@@ -290,12 +344,12 @@ async def list_destinations(account_id: Optional[int] = None):
     conn = get_conn()
     if account_id:
         rows = conn.execute(
-            "SELECT d.*, a.name as account_name FROM destinations d LEFT JOIN accounts a ON d.account_id = a.id WHERE d.account_id = ? ORDER BY d.can_post DESC, d.title ASC",
+            "SELECT d.*, a.name as account_name FROM destinations d LEFT JOIN accounts a ON d.account_id = a.id WHERE d.account_id = ? AND COALESCE(d.is_deleted, 0) = 0 ORDER BY COALESCE(d.is_enabled, 1) DESC, d.can_post DESC, d.title ASC",
             (account_id,),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT d.*, a.name as account_name FROM destinations d LEFT JOIN accounts a ON d.account_id = a.id ORDER BY d.can_post DESC, d.title ASC"
+            "SELECT d.*, a.name as account_name FROM destinations d LEFT JOIN accounts a ON d.account_id = a.id WHERE COALESCE(d.is_deleted, 0) = 0 ORDER BY COALESCE(d.is_enabled, 1) DESC, d.can_post DESC, d.title ASC"
         ).fetchall()
     conn.close()
     res = []
