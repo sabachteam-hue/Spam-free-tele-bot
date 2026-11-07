@@ -1240,6 +1240,8 @@ async def execute_campaign_round(campaign: dict):
     next_round = int(campaign["current_round"]) + 1
     min_delay = max(1, int(campaign["round_delay_min_seconds"]))
     max_delay = max(min_delay, int(campaign["round_delay_max_seconds"]))
+    round_strike_count = 0
+    strike_details: List[str] = []
 
     for idx, dest_id in enumerate(dest_ids):
         conn = get_conn()
@@ -1318,6 +1320,23 @@ async def execute_campaign_round(campaign: dict):
             delivery_note = f"Delivered OK{topic_note}"
             strip_emoji = (dest_cat == "text_only" or "no_emoji" in dest_tags or "text_only" in dest_tags)
 
+            # Live Pre-Send Policy Check: inspect live entity flags (noforwards, slowmode, banned_rights)
+            try:
+                live_ent = await asyncio.wait_for(client.get_entity(target_peer), timeout=2.0)
+                if getattr(live_ent, "noforwards", False) and dest.get("allow_forwards", 1):
+                    dest["allow_forwards"] = 0
+                    if "no_forward" not in dest_tags:
+                        dest_tags.append("no_forward")
+                    conn_nf = get_conn()
+                    conn_nf.execute(
+                        "UPDATE destinations SET allow_forwards = 0, auto_tags = ? WHERE id = ?",
+                        (json.dumps(sorted(list(set(dest_tags)))), dest_id),
+                    )
+                    conn_nf.commit()
+                    conn_nf.close()
+            except Exception:
+                pass
+
             if tmpl["mode"] == "forward" and tmpl.get("source_message_id"):
                 # Check if group blocks forwards OR requires stripping premium emojis -> send as clean copy!
                 if strip_emoji or not dest.get("allow_forwards", 1) or dest_cat == "no_forward" or "no_forward" in dest_tags:
@@ -1345,13 +1364,21 @@ async def execute_campaign_round(campaign: dict):
                                 )
                             )
                             msg_id = getattr(sent_msg, "id", 0)
+                            if not msg_id and hasattr(sent_msg, "updates"):
+                                for upd in getattr(sent_msg, "updates", []) or []:
+                                    if hasattr(upd, "message") and hasattr(upd.message, "id"):
+                                        msg_id = upd.message.id
+                                        break
+                                    elif hasattr(upd, "id") and isinstance(upd.id, int):
+                                        msg_id = upd.id
+                                        break
                         else:
                             res = await client.forward_messages(
                                 entity=target_peer,
                                 messages=int(tmpl["source_message_id"]),
                                 from_peer="me",
                             )
-                            msg_id = res.id if hasattr(res, "id") else 0
+                            msg_id = res.id if hasattr(res, "id") else (res[0].id if isinstance(res, list) and res else 0)
                     except ChatForwardsRestrictedError:
                         # Auto-learn that this group blocks forwards and fallback to Clean Copy!
                         msg_id = await send_saved_message_as_clean_copy(
@@ -1394,11 +1421,41 @@ async def execute_campaign_round(campaign: dict):
             conn.close()
             log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "sent", delivery_note, msg_id)
 
-            # Live Self-Learning Guard: Check if a moderation bot (Rose, GroupHelp, vocvn_bot, etc.)
-            # immediately warned or deleted the post due to a group rule
+            # Live Post-Send Self-Learning & Deletion/Mute Detector:
+            # Wait 3s, verify if message was deleted by a moderation bot/admin or if account got muted, and auto-update tags!
             try:
-                await asyncio.sleep(2.2)
-                after_msgs = await asyncio.wait_for(client.get_messages(target_peer, limit=3), timeout=2.0)
+                await asyncio.sleep(3.0)
+                was_deleted = False
+                was_muted = False
+                bot_mute_reason = ""
+
+                if msg_id and int(msg_id) > 0:
+                    try:
+                        chk = await asyncio.wait_for(client.get_messages(target_peer, ids=int(msg_id)), timeout=2.5)
+                        if chk is None:
+                            was_deleted = True
+                    except Exception:
+                        pass
+
+                try:
+                    perms_now = await asyncio.wait_for(client.get_permissions(target_peer, "me"), timeout=2.0)
+                    if not getattr(perms_now, "is_admin", False) and not getattr(perms_now, "is_creator", False):
+                        if getattr(perms_now, "send_messages", True) is False or getattr(perms_now, "send_plain", True) is False:
+                            was_muted = True
+                            p_ban = getattr(perms_now, "banned_rights", None)
+                            u_dt = getattr(p_ban, "until_date", None) if p_ban else None
+                            rest_iso = u_dt.isoformat() if (u_dt and u_dt.year < 2099) else (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
+                            conn_m = get_conn()
+                            conn_m.execute(
+                                "UPDATE destinations SET restriction_until = ?, rules_summary = 'Temporarily Muted by Group Bot/Admin' WHERE id = ?",
+                                (rest_iso, dest_id),
+                            )
+                            conn_m.commit()
+                            conn_m.close()
+                except Exception:
+                    pass
+
+                after_msgs = await asyncio.wait_for(client.get_messages(target_peer, limit=4), timeout=2.0)
                 for am in (after_msgs or []):
                     sender = getattr(am, "sender", None)
                     if not getattr(sender, "bot", False):
@@ -1406,6 +1463,8 @@ async def execute_campaign_round(campaign: dict):
                     btxt = (getattr(am, "message", None) or "").lower()
                     if not btxt:
                         continue
+                    if any(w in btxt for w in ["muted", "khóa mõm", "cấm chat", "đạt 2/2 cảnh cáo", "1/2 cảnh cáo", "restricted"]):
+                        bot_mute_reason = "Moderation Bot Warning/Mute"
                     learned_cat = None
                     learned_rule = None
                     if any(w in btxt for w in ["emoji", "cấm icon", "custom emoji", "sticker"]):
@@ -1414,7 +1473,7 @@ async def execute_campaign_round(campaign: dict):
                     elif any(w in btxt for w in ["forward", "chuyển tiếp"]):
                         learned_cat = "no_forward"
                         learned_rule = "Bot Auto-Detected: No Forwarding"
-                    elif any(w in btxt for w in ["24h", "1 bài", "1 post", "once a day", "mỗi ngày 1"]):
+                    elif any(w in btxt for w in ["24h", "24 giờ", "1 bài", "1 post", "once a day", "mỗi ngày", "đạt 2/2 cảnh cáo"]):
                         learned_cat = "24h_once"
                         learned_rule = "Bot Auto-Detected: 1 Post / 24h Limit"
                     elif any(w in btxt for w in ["no link", "cấm link", "không chèn link", "link not allowed"]):
@@ -1430,10 +1489,36 @@ async def execute_campaign_round(campaign: dict):
                         conn_bot.commit()
                         conn_bot.close()
                         break
+
+                if was_deleted or was_muted:
+                    round_strike_count += 1
+                    why_lbl = "Muted + Msg Deleted" if (was_deleted and was_muted) else ("Account Muted" if was_muted else "Msg Deleted by Bot/Admin")
+                    if bot_mute_reason:
+                        why_lbl = f"{why_lbl} ({bot_mute_reason})"
+                    strike_details.append(f"{dest['title']}: {why_lbl}")
+                    conn_st = get_conn()
+                    conn_st.execute(
+                        "UPDATE campaigns SET total_failed = total_failed + 1, total_sent = CASE WHEN total_sent > 0 THEN total_sent - 1 ELSE 0 END WHERE id = ?",
+                        (camp_id,),
+                    )
+                    conn_st.commit()
+                    conn_st.close()
+                    log_delivery(
+                        camp_id,
+                        account_id,
+                        dest_id,
+                        dest["title"],
+                        next_round,
+                        "failed",
+                        f"⚠️ Post-Send Check: {why_lbl} (Strike {round_strike_count}/3)",
+                        msg_id,
+                    )
             except Exception:
                 pass
 
         except SlowModeWaitError as e:
+            round_strike_count += 1
+            strike_details.append(f"{dest['title']}: SlowMode ({e.seconds}s)")
             safe_until = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 300)
             conn = get_conn()
             conn.execute(
@@ -1450,21 +1535,21 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "cooldown",
-                f"SlowModeWait ({e.seconds}s) + 5m safety buffer",
+                f"SlowModeWait ({e.seconds}s) + 5m safety buffer (Strike {round_strike_count}/3)",
             )
 
         except FloodWaitError as e:
-            safe_until = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 300)
+            safe_until = datetime.now(timezone.utc) + timedelta(seconds=max(e.seconds + 300, 7200))
             conn = get_conn()
             conn.execute(
                 "UPDATE accounts SET cooldown_until = ? WHERE id = ?",
                 (safe_until.isoformat(), account_id),
             )
             conn.execute(
-                "UPDATE campaigns SET next_run_at = ?, total_failed = total_failed + 1, last_error = ? WHERE id = ?",
+                "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, total_failed = total_failed + 1, last_error = ? WHERE id = ?",
                 (
                     safe_until.isoformat(),
-                    f"FloodWait {e.seconds}s — Cooldown active (+5m safety buffer)",
+                    f"⛔ FloodWait ({e.seconds}s): Auto-paused for 2h+ cooldown to protect your Telegram ID. Will auto-resume when safe, or click 'Resume / Run' to start manually.",
                     camp_id,
                 ),
             )
@@ -1477,13 +1562,18 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "cooldown",
-                f"FloodWait {e.seconds}s — Pausing account until safe",
+                f"FloodWait {e.seconds}s — Pausing campaign for safety cooldown",
             )
             return
 
         except (ChatWriteForbiddenError, UserBannedInChannelError, ChannelPrivateError, ChatAdminRequiredError) as e:
+            round_strike_count += 1
+            strike_details.append(f"{dest['title']}: Restricted/Muted ({type(e).__name__})")
             conn = get_conn()
-            conn.execute("UPDATE destinations SET can_post = 0, category = 'restricted' WHERE id = ?", (dest_id,))
+            conn.execute(
+                "UPDATE destinations SET can_post = 0, category = 'restricted', auto_tags = '[\"restricted\"]', rules_summary = ? WHERE id = ?",
+                (f"Auto-Restricted during campaign: {type(e).__name__}", dest_id),
+            )
             conn.execute("UPDATE campaigns SET total_failed = total_failed + 1 WHERE id = ?", (camp_id,))
             conn.commit()
             conn.close()
@@ -1494,15 +1584,15 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "failed",
-                f"Posting forbidden ({type(e).__name__}) — Auto-disabled group",
+                f"Posting forbidden ({type(e).__name__}) — Auto-moved to Restricted (Strike {round_strike_count}/3)",
             )
 
         except PeerFloodError:
-            safe_until = datetime.now(timezone.utc) + timedelta(hours=6)
+            safe_until = datetime.now(timezone.utc) + timedelta(hours=2)
             conn = get_conn()
             conn.execute("UPDATE accounts SET cooldown_until = ? WHERE id = ?", (safe_until.isoformat(), account_id))
             conn.execute(
-                "UPDATE campaigns SET next_run_at = ?, last_error = 'PeerFlood detected — Auto-cooling for 6h to protect account' WHERE id = ?",
+                "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, last_error = '⛔ PeerFlood Warning: Auto-stopped for 2 hours to protect your Telegram ID from limitation. Will auto-resume after 2h, or click Resume / Run to start manually.' WHERE id = ?",
                 (safe_until.isoformat(), camp_id),
             )
             conn.commit()
@@ -1514,19 +1604,51 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "cooldown",
-                "PeerFlood Warning — Auto-cooling account 6h",
+                "PeerFlood Warning — Auto-cooling campaign for 2h",
             )
             return
 
         except Exception as e:
+            err_str = str(e)
+            round_strike_count += 1
+            strike_details.append(f"{dest['title']}: {err_str[:60]}")
             conn = get_conn()
             conn.execute(
                 "UPDATE campaigns SET total_failed = total_failed + 1, last_error = ? WHERE id = ?",
-                (str(e)[:200], camp_id),
+                (err_str[:200], camp_id),
             )
             conn.commit()
             conn.close()
-            log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "failed", str(e)[:200])
+            log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "failed", f"{err_str[:160]} (Strike {round_strike_count}/3)")
+
+        # ⚡ SMART ANTI-BAN CIRCUIT BREAKER:
+        # If messages were deleted, muted, or restricted in MORE THAN 2 groups (> 2, i.e., 3+ groups),
+        # immediately stop the campaign, show the exact error message, and put it on a 2-hour cooldown
+        # so the Telegram account never gets limited! Auto-resumes after 2 hours (or manually via Resume/Run button).
+        if round_strike_count > 2:
+            cooldown_2h = datetime.now(timezone.utc) + timedelta(hours=2)
+            stop_reason = (
+                f"⛔ Auto-Stopped (Anti-Ban Protection): Messages were deleted, muted, or restricted in {round_strike_count} groups "
+                f"({'; '.join(strike_details)}). Campaign paused for 2 hours cooldown to protect your Telegram ID from limitation. "
+                f"It will automatically resume after 2 hours, or you can click 'Resume / Run' anytime to start manually."
+            )
+            conn_cb = get_conn()
+            conn_cb.execute(
+                "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, last_error = ? WHERE id = ?",
+                (cooldown_2h.isoformat(), stop_reason, camp_id),
+            )
+            conn_cb.commit()
+            conn_cb.close()
+            log_delivery(
+                camp_id,
+                account_id,
+                dest_id,
+                "🛡️ Anti-Ban Shield (Circuit Breaker)",
+                next_round,
+                "cooldown",
+                stop_reason,
+            )
+            return
 
         if idx < len(dest_ids) - 1:
             jitter_sleep = random.uniform(min_delay, max_delay)
@@ -1587,13 +1709,64 @@ def log_delivery(
 RUNNING_CAMPAIGN_TASKS: Dict[int, asyncio.Task] = {}
 
 
+async def auto_discover_new_groups_and_policies(force_deep_rescan: bool = False):
+    """
+    Background watcher that checks all connected Telegram accounts:
+    1. Immediately detects any newly joined groups/channels/forums and auto-syncs + deep-scans them.
+    2. Periodically refreshes group rules, bot limitations, and auto-tags so daily marketing changes stay updated automatically.
+    """
+    conn = get_conn()
+    accs = conn.execute("SELECT id FROM accounts WHERE status = 'connected'").fetchall()
+    conn.close()
+    for a in accs:
+        acc_id = int(a["id"])
+        try:
+            if force_deep_rescan:
+                await sync_account_destinations(acc_id, deep_scan=True)
+                continue
+            client = await get_or_create_client(acc_id)
+            if not await client.is_user_authorized():
+                continue
+            conn_chk = get_conn()
+            known_ids = {
+                int(r[0])
+                for r in conn_chk.execute(
+                    "SELECT telegram_id FROM destinations WHERE account_id = ?",
+                    (acc_id,),
+                ).fetchall()
+            }
+            conn_chk.close()
+            dialogs = await client.get_dialogs(limit=80)
+            has_new_group = any(
+                (d.is_group or d.is_channel) and int(d.id) not in known_ids
+                for d in dialogs
+            )
+            if has_new_group:
+                await sync_account_destinations(acc_id, deep_scan=True)
+        except Exception as e:
+            print(f"Auto-discover groups warning for account {acc_id}:", e)
+
+
 async def campaign_scheduler_loop():
-    """Background worker loop that checks runnable campaigns every 3 seconds."""
+    """Background worker loop that checks runnable/cooldown campaigns every 3s and auto-syncs new groups & daily policy changes."""
+    last_group_watch_ts = 0.0
+    last_policy_rescan_ts = datetime.now(timezone.utc).timestamp()
+
     while True:
         try:
             now_dt = datetime.now(timezone.utc)
+            now_ts = now_dt.timestamp()
+
+            # Check for newly joined Telegram groups every 90 seconds automatically
+            if now_ts - last_group_watch_ts >= 90:
+                last_group_watch_ts = now_ts
+                force_rescan = (now_ts - last_policy_rescan_ts >= 14400)  # Full policy/tag rescan every 4 hours
+                if force_rescan:
+                    last_policy_rescan_ts = now_ts
+                asyncio.create_task(auto_discover_new_groups_and_policies(force_deep_rescan=force_rescan))
+
             conn = get_conn()
-            rows = conn.execute("SELECT * FROM campaigns WHERE status = 'running'").fetchall()
+            rows = conn.execute("SELECT * FROM campaigns WHERE status IN ('running', 'cooldown')").fetchall()
             conn.close()
 
             for row in rows:
@@ -1621,6 +1794,17 @@ async def campaign_scheduler_loop():
                             continue
                     except Exception:
                         pass
+
+                # If campaign was in 2-hour Anti-Ban Cooldown and the 2 hours have now elapsed, automatically resume it!
+                if camp.get("status") == "cooldown":
+                    conn_res = get_conn()
+                    conn_res.execute(
+                        "UPDATE campaigns SET status = 'running', last_error = '✅ Auto-resumed after 2-hour Anti-Ban cooldown' WHERE id = ?",
+                        (cid,),
+                    )
+                    conn_res.commit()
+                    conn_res.close()
+                    camp["status"] = "running"
 
                 RUNNING_CAMPAIGN_TASKS[cid] = asyncio.create_task(execute_campaign_round(camp))
 

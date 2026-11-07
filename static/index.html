@@ -432,7 +432,7 @@
   <div id="modal-template" class="fixed inset-0 bg-slate-900/60 hidden items-center justify-center z-50 p-4">
     <div class="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-xl">
       <div class="flex items-center justify-between border-b pb-3">
-        <h3 class="font-extrabold text-base">Create Message Template</h3>
+        <h3 id="modal-template-title" class="font-extrabold text-base">Create Message Template</h3>
         <button onclick="closeModal('modal-template')" class="text-slate-400 hover:text-slate-700 font-bold">✕</button>
       </div>
       <div class="space-y-3 text-xs">
@@ -477,7 +477,7 @@
       </div>
       <div class="flex justify-end gap-2 pt-2">
         <button onclick="closeModal('modal-template')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancel</button>
-        <button onclick="submitTemplate()" class="px-4 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">Save Template</button>
+        <button id="modal-template-save-btn" onclick="submitTemplate()" class="px-4 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">Save Template</button>
       </div>
     </div>
   </div>
@@ -1322,6 +1322,16 @@
 
     // ==================== TEMPLATES ====================
     function openTemplateModal() {
+      STATE.editingTemplateId = null;
+      const titleEl = document.getElementById('modal-template-title');
+      const saveBtn = document.getElementById('modal-template-save-btn');
+      if (titleEl) titleEl.innerText = 'Create Message Template';
+      if (saveBtn) saveBtn.innerText = 'Save Template';
+
+      document.getElementById('tmpl-name').value = '';
+      document.getElementById('tmpl-mode').value = 'forward';
+      document.getElementById('tmpl-content').value = '';
+
       const sel = document.getElementById('tmpl-src-acc');
       const connected = STATE.accounts.filter(a => a.status === 'connected');
       sel.innerHTML = connected.length
@@ -1331,6 +1341,37 @@
       openModal('modal-template');
       if (connected.length) {
         loadSavedMessagesForTemplate();
+      }
+    }
+
+    async function openEditTemplateModal(id) {
+      const t = STATE.templates.find(item => item.id === id);
+      if (!t) return;
+      STATE.editingTemplateId = t.id;
+
+      const titleEl = document.getElementById('modal-template-title');
+      const saveBtn = document.getElementById('modal-template-save-btn');
+      if (titleEl) titleEl.innerText = 'Edit Message Template';
+      if (saveBtn) saveBtn.innerText = 'Update Template';
+
+      document.getElementById('tmpl-name').value = t.name || '';
+      document.getElementById('tmpl-mode').value = t.mode || 'forward';
+      document.getElementById('tmpl-content').value = t.content || '';
+
+      const sel = document.getElementById('tmpl-src-acc');
+      const connected = STATE.accounts.filter(a => a.status === 'connected');
+      sel.innerHTML = connected.length
+        ? connected.map(a => `<option value="${a.id}">${a.name} (${a.phone || a.username})</option>`).join('')
+        : `<option value="">No connected account available</option>`;
+
+      if (t.source_account_id) {
+        sel.value = String(t.source_account_id);
+      }
+
+      toggleTemplateMode();
+      openModal('modal-template');
+      if (connected.length) {
+        await loadSavedMessagesForTemplate(t.source_message_id || null);
       }
     }
 
@@ -1356,7 +1397,7 @@
       });
     }
 
-    async function loadSavedMessagesForTemplate() {
+    async function loadSavedMessagesForTemplate(preselectMsgId = null) {
       const accId = document.getElementById('tmpl-src-acc').value;
       if (!accId) return;
       const sel = document.getElementById('tmpl-src-msg');
@@ -1377,9 +1418,14 @@
           return `<option value="${m.id}" data-text="${encodeURIComponent(m.text)}">[#${m.id}] ${fwdLabel}${emojiLabel}${cleanPreview}</option>`;
         }).join('');
 
+        const activeId = preselectMsgId && msgs.some(m => Number(m.id) === Number(preselectMsgId))
+          ? Number(preselectMsgId)
+          : msgs[0].id;
+        sel.value = String(activeId);
+
         if (cardsBox) {
-          cardsBox.innerHTML = msgs.map((m, i) => `
-            <div onclick="selectSavedMessageCard(${m.id})" data-id="${m.id}" class="saved-msg-card cursor-pointer p-2.5 rounded-xl border border-slate-200 bg-white hover:border-[#1a2b88] transition ${i === 0 ? 'border-[#1a2b88] bg-blue-50/50 ring-2 ring-[#1a2b88]/20' : ''}">
+          cardsBox.innerHTML = msgs.map((m) => `
+            <div onclick="selectSavedMessageCard(${m.id})" data-id="${m.id}" class="saved-msg-card cursor-pointer p-2.5 rounded-xl border border-slate-200 bg-white hover:border-[#1a2b88] transition ${Number(m.id) === Number(activeId) ? 'border-[#1a2b88] bg-blue-50/50 ring-2 ring-[#1a2b88]/20' : ''}">
               <div class="flex items-center justify-between gap-1.5 flex-wrap mb-1">
                 <div class="flex items-center gap-1.5 flex-wrap">
                   <span class="font-extrabold text-[11px] text-slate-900">#${m.id}</span>
@@ -1418,11 +1464,15 @@
           srcMsg = Number(msgSel.value);
           if (!srcAcc || !srcMsg) return showNotice('Please load and select a message from Saved Messages.', 'error', 'Select Saved Message');
           const opt = msgSel.options[msgSel.selectedIndex];
-          content = decodeURIComponent(opt.getAttribute('data-text') || 'Forwarded Saved Message');
+          content = opt ? decodeURIComponent(opt.getAttribute('data-text') || 'Forwarded Saved Message') : content;
         }
 
-        await api('/api/message-templates', {
-          method: 'POST',
+        const isEditing = Boolean(STATE.editingTemplateId);
+        const url = isEditing ? `/api/message-templates/${STATE.editingTemplateId}` : '/api/message-templates';
+        const method = isEditing ? 'PUT' : 'POST';
+
+        await api(url, {
+          method,
           body: JSON.stringify({
             name: name || 'Message Template',
             mode,
@@ -1431,8 +1481,9 @@
             source_message_id: srcMsg
           })
         });
+        STATE.editingTemplateId = null;
         closeModal('modal-template');
-        showNotice('Message template saved!', 'success', 'Template Created');
+        showNotice(isEditing ? 'Message template updated!' : 'Message template saved!', 'success', isEditing ? 'Template Updated' : 'Template Created');
         refreshAll();
       } catch (e) {
         showNotice(e.message, 'error');
@@ -1458,7 +1509,10 @@
           </div>
           <div class="flex items-center justify-between pt-2 text-xs text-slate-400">
             <span>${t.source_account_name ? `Source: ${t.source_account_name}` : 'All Accounts Compatible'}</span>
-            <button onclick="deleteTemplate(${t.id})" class="text-rose-600 font-bold hover:underline">Delete</button>
+            <div class="flex items-center gap-3">
+              <button onclick="openEditTemplateModal(${t.id})" class="px-2.5 py-1 rounded-lg bg-indigo-50 text-[#1a2b88] font-bold hover:bg-indigo-100 transition">Edit</button>
+              <button onclick="deleteTemplate(${t.id})" class="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-600 font-bold hover:bg-rose-100 transition">Delete</button>
+            </div>
           </div>
         </div>
       `).join('');
@@ -1614,7 +1668,7 @@
             <div class="flex items-center gap-2">
               ${c.status === 'running'
                 ? `<button onclick="setCampaignStatus(${c.id}, 'paused')" class="px-3.5 py-2 rounded-xl bg-amber-500 text-white text-xs font-bold">Pause</button>`
-                : `<button onclick="setCampaignStatus(${c.id}, 'running')" class="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">Resume / Run</button>`}
+                : `<button onclick="setCampaignStatus(${c.id}, 'running')" class="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">${c.status === 'cooldown' ? 'Start Now (Override Cooldown)' : 'Resume / Run'}</button>`}
               <button onclick="cloneCampaign(${c.id})" class="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700">Duplicate</button>
               <button onclick="deleteCampaign(${c.id})" class="px-3 py-2 rounded-xl border border-rose-200 text-xs font-bold text-rose-600">Delete</button>
             </div>
@@ -1640,15 +1694,19 @@
             <div>
               <span class="text-slate-400 block text-[10px] font-bold uppercase">Next Scheduled Run</span>
               <span class="font-bold text-indigo-700">${
-                c.status !== 'running'
-                  ? 'Paused'
-                  : (c.next_run_in_seconds > 0
-                      ? `In ${Math.floor(c.next_run_in_seconds / 60)}m ${c.next_run_in_seconds % 60}s`
-                      : 'Running Now')
+                c.status === 'cooldown'
+                  ? (c.next_run_in_seconds > 0
+                      ? `2h Cooldown · Auto-Starts in ${Math.floor(c.next_run_in_seconds / 60)}m ${c.next_run_in_seconds % 60}s`
+                      : 'Resuming Now...')
+                  : (c.status !== 'running'
+                      ? 'Paused'
+                      : (c.next_run_in_seconds > 0
+                          ? `In ${Math.floor(c.next_run_in_seconds / 60)}m ${c.next_run_in_seconds % 60}s`
+                          : 'Running Now'))
               }</span>
             </div>
           </div>
-          ${c.last_error ? `<div class="text-xs bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-xl font-medium">Notice: ${c.last_error}</div>` : ''}
+          ${c.last_error ? `<div class="text-xs ${c.status === 'cooldown' || String(c.last_error).includes('⛔') ? 'bg-rose-50 border border-rose-300 text-rose-800 font-bold' : 'bg-amber-50 border border-amber-200 text-amber-800 font-medium'} px-3.5 py-2.5 rounded-xl">${c.last_error}</div>` : ''}
         </div>
       `).join('');
     }

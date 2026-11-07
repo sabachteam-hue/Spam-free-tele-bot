@@ -405,6 +405,30 @@ async def create_template(payload: TemplateCreate):
     return {"id": tid}
 
 
+@app.put("/api/message-templates/{template_id}")
+async def update_template(template_id: int, payload: TemplateCreate):
+    conn = get_conn()
+    conn.execute(
+        """
+        UPDATE templates
+        SET name = ?, mode = ?, content = ?, parse_mode = ?, source_account_id = ?, source_message_id = ?
+        WHERE id = ?
+        """,
+        (
+            payload.name.strip() or "Message Template",
+            payload.mode,
+            payload.content,
+            payload.parse_mode,
+            payload.source_account_id,
+            payload.source_message_id,
+            template_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": template_id, "updated": True}
+
+
 @app.delete("/api/message-templates/{template_id}")
 async def delete_template(template_id: int):
     conn = get_conn()
@@ -485,8 +509,11 @@ async def create_campaign(payload: CampaignCreate):
 async def update_campaign_status(campaign_id: int, payload: CampaignStatusUpdate):
     conn = get_conn()
     if payload.status == "running":
+        row = conn.execute("SELECT account_id FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        if row and row["account_id"]:
+            conn.execute("UPDATE accounts SET cooldown_until = NULL WHERE id = ?", (row["account_id"],))
         conn.execute(
-            "UPDATE campaigns SET status = 'running', next_run_at = ?, current_round = CASE WHEN status = 'completed' THEN 0 ELSE current_round END WHERE id = ?",
+            "UPDATE campaigns SET status = 'running', next_run_at = ?, last_error = NULL, current_round = CASE WHEN status = 'completed' THEN 0 ELSE current_round END WHERE id = ?",
             (now_iso(), campaign_id),
         )
     else:
