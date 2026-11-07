@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import base64
 import io
@@ -6,7 +7,7 @@ import random
 import re
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 import qrcode
 from telethon import TelegramClient, functions, types, utils
@@ -1316,13 +1317,35 @@ async def fetch_saved_messages(account_id: int, limit: int = 80) -> list:
             media_type = "webpage"
         elif rich_msg is not None:
             media_type = "rich table"
+        elif isinstance(media, types.MessageMediaUnsupported):
+            media_type = "rich post"
 
         is_pinned = bool(getattr(m, "pinned", False))
         display_text, custom_emoji_count, button_rows = extract_full_message_details(m)
 
+        # If forwarded message still has empty text (e.g. cached before RichMessage layer), try fetching original source post
+        if not display_text and fwd:
+            orig_peer = getattr(fwd, "saved_from_peer", None) or getattr(fwd, "from_id", None)
+            orig_msg_id = getattr(fwd, "saved_from_msg_id", None) or getattr(fwd, "channel_post", None)
+            if orig_peer and orig_msg_id:
+                try:
+                    orig_m = await asyncio.wait_for(
+                        client.get_messages(orig_peer, ids=int(orig_msg_id)),
+                        timeout=2.0,
+                    )
+                    if orig_m:
+                        o_txt, o_em, o_btns = extract_full_message_details(orig_m)
+                        if o_txt:
+                            display_text = o_txt
+                            custom_emoji_count = max(custom_emoji_count, o_em)
+                            if o_btns and not button_rows:
+                                button_rows = o_btns
+                except Exception:
+                    pass
+
         if not display_text:
             if forwarded_from:
-                display_text = f"[Forwarded from {forwarded_from}] ({media_type.upper()})"
+                display_text = f"✨ Rich Post / Table from {forwarded_from} (Msg #{m.id} — Ready to Forward & Clean-Copy)"
             else:
                 display_text = f"[{media_type.upper()} Message #{m.id}]"
 
@@ -1374,6 +1397,45 @@ def reset_daily_quota_if_needed(conn, acc: dict) -> int:
     return acc["sent_today"]
 
 
+async def _forward_with_drop_author(
+    client: TelegramClient,
+    source_msg_id: int,
+    target_peer: int,
+    topic_id: Optional[int] = None,
+    drop_author: bool = True,
+) -> int:
+    """Server-side forward with drop_author=True (or False fallback) that works on all message/table types."""
+    if topic_id and int(topic_id) > 0:
+        req_kwargs = {
+            "from_peer": "me",
+            "id": [int(source_msg_id)],
+            "to_peer": target_peer,
+            "top_msg_id": int(topic_id),
+            "drop_author": drop_author,
+            "random_id": [random.randint(-2**63, 2**63 - 1)],
+        }
+        sent_upd = await client(functions.messages.ForwardMessagesRequest(**req_kwargs))
+        msg_id = getattr(sent_upd, "id", 0)
+        if not msg_id and hasattr(sent_upd, "updates"):
+            for upd in getattr(sent_upd, "updates", []) or []:
+                if hasattr(upd, "message") and hasattr(upd.message, "id"):
+                    msg_id = upd.message.id
+                    break
+                elif hasattr(upd, "id") and isinstance(upd.id, int):
+                    msg_id = upd.id
+                    break
+        return msg_id or 1
+    else:
+        res = await client.forward_messages(
+            entity=target_peer,
+            messages=int(source_msg_id),
+            from_peer="me",
+            drop_author=drop_author,
+        )
+        msg_id = res.id if hasattr(res, "id") else (res[0].id if isinstance(res, list) and res else 0)
+        return msg_id or 1
+
+
 async def send_saved_message_as_clean_copy(
     client: TelegramClient,
     source_msg_id: int,
@@ -1393,27 +1455,9 @@ async def send_saved_message_as_clean_copy(
     """
     if not strip_custom_emoji:
         try:
-            req_kwargs = {
-                "from_peer": "me",
-                "id": [int(source_msg_id)],
-                "to_peer": target_peer,
-                "drop_author": True,
-                "random_id": [random.randint(-2**63, 2**63 - 1)],
-            }
-            if topic_id and int(topic_id) > 0:
-                req_kwargs["top_msg_id"] = int(topic_id)
-            sent_upd = await client(functions.messages.ForwardMessagesRequest(**req_kwargs))
-            msg_id = getattr(sent_upd, "id", 0)
-            if not msg_id and hasattr(sent_upd, "updates"):
-                for upd in getattr(sent_upd, "updates", []) or []:
-                    if hasattr(upd, "message") and hasattr(upd.message, "id"):
-                        msg_id = upd.message.id
-                        break
-                    elif hasattr(upd, "id") and isinstance(upd.id, int):
-                        msg_id = upd.id
-                        break
-            if msg_id:
-                return msg_id
+            return await _forward_with_drop_author(
+                client, int(source_msg_id), target_peer, topic_id, drop_author=True
+            )
         except Exception:
             pass
 
@@ -1423,49 +1467,53 @@ async def send_saved_message_as_clean_copy(
 
     extracted_text, _, _ = extract_full_message_details(src_msg)
     raw_msg_str = getattr(src_msg, "message", None) or ""
-    msg_body = raw_msg_str if raw_msg_str.strip() else extracted_text
+    msg_body = (raw_msg_str if raw_msg_str.strip() else extracted_text).strip()
+
+    if not msg_body and getattr(src_msg, "fwd_from", None):
+        fwd = src_msg.fwd_from
+        orig_peer = getattr(fwd, "saved_from_peer", None) or getattr(fwd, "from_id", None)
+        orig_msg_id = getattr(fwd, "saved_from_msg_id", None) or getattr(fwd, "channel_post", None)
+        if orig_peer and orig_msg_id:
+            try:
+                orig_m = await asyncio.wait_for(
+                    client.get_messages(orig_peer, ids=int(orig_msg_id)),
+                    timeout=2.0,
+                )
+                if orig_m:
+                    o_txt, _, _ = extract_full_message_details(orig_m)
+                    if o_txt.strip():
+                        msg_body = o_txt.strip()
+            except Exception:
+                pass
 
     entities = list(src_msg.entities or []) if raw_msg_str.strip() else []
     if strip_custom_emoji and entities:
         entities = [e for e in entities if not isinstance(e, types.MessageEntityCustomEmoji)]
 
     media_file = None
-    if allow_media and not strip_custom_emoji and src_msg.media:
-        if not isinstance(src_msg.media, (types.MessageMediaWebPage, types.MessageMediaUnsupported, types.MessageMediaToDo)):
+    if allow_media and not strip_custom_emoji and getattr(src_msg, "media", None):
+        if isinstance(src_msg.media, (types.MessageMediaPhoto, types.MessageMediaDocument)):
             media_file = src_msg.media
 
-    if not msg_body.strip() and media_file is None:
-        # Final fallback: server-side forward with drop_author=True so it never fails with 'message is empty'
-        req_kwargs = {
-            "from_peer": "me",
-            "id": [int(source_msg_id)],
-            "to_peer": target_peer,
-            "drop_author": True,
-            "random_id": [random.randint(-2**63, 2**63 - 1)],
-        }
-        if topic_id and int(topic_id) > 0:
-            req_kwargs["top_msg_id"] = int(topic_id)
-        sent_upd = await client(functions.messages.ForwardMessagesRequest(**req_kwargs))
-        msg_id = getattr(sent_upd, "id", 0)
-        if not msg_id and hasattr(sent_upd, "updates"):
-            for upd in getattr(sent_upd, "updates", []) or []:
-                if hasattr(upd, "message") and hasattr(upd.message, "id"):
-                    msg_id = upd.message.id
-                    break
-                elif hasattr(upd, "id") and isinstance(upd.id, int):
-                    msg_id = upd.id
-                    break
-        return msg_id
+    if not msg_body and media_file is None:
+        return await _forward_with_drop_author(
+            client, int(source_msg_id), target_peer, topic_id, drop_author=True
+        )
 
-    sent = await client.send_message(
-        entity=target_peer,
-        message=msg_body,
-        file=media_file,
-        formatting_entities=entities if entities else None,
-        link_preview=False,
-        reply_to=int(topic_id) if (topic_id and int(topic_id) > 0) else None,
-    )
-    return sent.id if hasattr(sent, "id") else 0
+    try:
+        sent = await client.send_message(
+            entity=target_peer,
+            message=msg_body,
+            file=media_file,
+            formatting_entities=entities if entities else None,
+            link_preview=False,
+            reply_to=int(topic_id) if (topic_id and int(topic_id) > 0) else None,
+        )
+        return sent.id if hasattr(sent, "id") else 1
+    except ValueError:
+        return await _forward_with_drop_author(
+            client, int(source_msg_id), target_peer, topic_id, drop_author=True
+        )
 
 
 async def execute_campaign_round(campaign: dict):
@@ -1533,6 +1581,12 @@ async def execute_campaign_round(campaign: dict):
     max_delay = max(min_delay, int(campaign["round_delay_max_seconds"]))
     round_strike_count = 0
     strike_details: List[str] = []
+
+    if campaign.get("last_error") and "cannot be empty" in str(campaign.get("last_error")):
+        conn_clr = get_conn()
+        conn_clr.execute("UPDATE campaigns SET last_error = NULL WHERE id = ?", (camp_id,))
+        conn_clr.commit()
+        conn_clr.close()
 
     for idx, dest_id in enumerate(dest_ids):
         conn = get_conn()
@@ -1690,24 +1744,34 @@ async def execute_campaign_round(campaign: dict):
                         conn_learn.close()
                         delivery_note = "Auto-Learned No-Forward -> Sent as Clean Copy"
             else:
-                final_text = parse_spintax(tmpl["content"])
-                if campaign.get("simulate_typing", 1):
-                    try:
-                        async with client.action(target_peer, "typing"):
-                            await asyncio.sleep(random.uniform(1.2, 3.0))
-                    except Exception:
-                        pass
+                final_text = parse_spintax(tmpl["content"] or "")
+                if not final_text.strip() and tmpl.get("source_message_id"):
+                    msg_id = await send_saved_message_as_clean_copy(
+                        client,
+                        int(tmpl["source_message_id"]),
+                        target_peer,
+                        topic_id,
+                        strip_custom_emoji=strip_emoji,
+                        allow_media=bool(dest.get("allow_media", 1)),
+                    )
+                else:
+                    if campaign.get("simulate_typing", 1):
+                        try:
+                            async with client.action(target_peer, "typing"):
+                                await asyncio.sleep(random.uniform(1.2, 3.0))
+                        except Exception:
+                            pass
 
-                sent_msg = await client.send_message(
-                    entity=target_peer,
-                    message=final_text,
-                    parse_mode=tmpl.get("parse_mode") or "html",
-                    reply_to=int(topic_id) if topic_id else None,
-                )
-                msg_id = sent_msg.id
+                    sent_msg = await client.send_message(
+                        entity=target_peer,
+                        message=final_text,
+                        parse_mode=tmpl.get("parse_mode") or "html",
+                        reply_to=int(topic_id) if topic_id else None,
+                    )
+                    msg_id = sent_msg.id
 
             conn = get_conn()
-            conn.execute("UPDATE campaigns SET total_sent = total_sent + 1 WHERE id = ?", (camp_id,))
+            conn.execute("UPDATE campaigns SET total_sent = total_sent + 1, last_error = NULL WHERE id = ?", (camp_id,))
             conn.execute("UPDATE accounts SET sent_today = sent_today + 1 WHERE id = ?", (account_id,))
             conn.execute("UPDATE destinations SET last_sent_at = ? WHERE id = ?", (now_iso(), dest_id))
             conn.commit()

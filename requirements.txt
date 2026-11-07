@@ -1,6 +1,6 @@
 fastapi>=0.110.0
 uvicorn>=0.29.0
-telethon>=1.36.0
+telethon>=1.45.0
 pydantic>=2.0.0
 python-socks>=2.4.0
 qrcode[pil]>=7.4.0
