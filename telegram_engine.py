@@ -373,21 +373,27 @@ def analyze_entity_and_rules(
 
     is_24h = False
     is_no_emoji = False
+    folder_no_forward = False
+    folder_no_emoji = False
+    folder_24h = False
 
     # 1. Check User's Telegram Chat Folders first (highest priority user classification!)
     for fn in folder_names:
         fn_low = fn.lower()
         if any(k in fn_low for k in ["emji", "emoji", "withut", "without", "text only", "no media"]):
             is_no_emoji = True
+            folder_no_emoji = True
             tags.append("text_only")
             tags.append("no_emoji")
             reasons.append(f"Telegram Folder: {fn} (No Premium Emojis)")
         if any(k in fn_low for k in ["forwrd", "forward", "dnt", "dont", "don't", "no fwd", "clean"]):
             allow_forwards = 0
+            folder_no_forward = True
             tags.append("no_forward")
             reasons.append(f"Telegram Folder: {fn} (No Forwarding -> Auto Clean Copy)")
         if any(k in fn_low for k in ["24h", "24 hour", "1 post", "daily", "once"]):
             is_24h = True
+            folder_24h = True
             tags.append("24h_once")
             reasons.append(f"Telegram Folder: {fn} (1 Post / 24h)")
         if any(k in fn_low for k in ["no link", "nolink"]):
@@ -440,26 +446,28 @@ def analyze_entity_and_rules(
         if not any("No Links" in r for r in reasons):
             reasons.append("Bot/Group Rule: No Links")
 
-    # 24h / Daily post limit detection from rules & bot warnings
+    # 24h / Daily post limit detection from rules & bot warnings (strictly daily post limit phrases, not 'BH 24h' warranty or 'muted 24h')
     if slowmode_seconds >= 3600 or any(
         k in txt
         for k in [
-            "24h",
-            "24 hour",
-            "24 hours",
             "1 post per day",
             "1 post/day",
             "1 post / day",
+            "1 post per 24h",
+            "1 post / 24h",
+            "1 post in 24h",
             "once a day",
             "once per day",
+            "once per 24h",
             "one post per day",
-            "only 1 post",
+            "only 1 post per day",
             "1 bài/ngày",
             "1 bài / ngày",
+            "1 bài/24h",
+            "1 bài / 24h",
             "1 lần/ngày",
-            "mỗi ngày 1",
-            "giới hạn bài đăng",
-            "spam quá",
+            "mỗi ngày 1 bài",
+            "giới hạn 1 bài",
         ]
     ):
         is_24h = True
@@ -516,13 +524,19 @@ def analyze_entity_and_rules(
         if not tags or set(tags).issubset({"premium_emoji_ok", "forward_ok"}):
             tags.append("standard")
 
-    # Determine primary distribution category
+    # Determine primary distribution category (User's explicit Telegram Folders take highest priority!)
     if not can_post:
         category = "restricted"
-    elif is_24h:
+    elif folder_no_forward:
+        category = "no_forward"
+    elif folder_no_emoji:
+        category = "text_only"
+    elif folder_24h:
         category = "24h_once"
     elif not allow_forwards:
         category = "no_forward"
+    elif is_24h:
+        category = "24h_once"
     elif is_no_emoji or not allow_media or "text_only" in tags:
         category = "text_only"
     elif not allow_links:
@@ -779,7 +793,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                 except Exception:
                     pass
 
-                # C) Recent 20 Group Messages — Extract Moderation Bot warnings, Bot-Only Logs feeds & Chat Lock notices
+                # C) Recent 20 Group Messages — Extract Moderation Bot warnings & Bot-Only Logs feeds
                 try:
                     recent_msgs = await asyncio.wait_for(
                         client.get_messages(entity, limit=20),
@@ -787,7 +801,7 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
                     )
                     real_msgs = [rm for rm in (recent_msgs or []) if getattr(rm, "message", None) or getattr(rm, "media", None)]
                     bot_or_admin_count = 0
-                    for idx, rm in enumerate(real_msgs):
+                    for rm in real_msgs:
                         msg_txt = getattr(rm, "message", None) or ""
                         sender = getattr(rm, "sender", None)
                         is_bot = bool(getattr(sender, "bot", False))
@@ -797,16 +811,10 @@ async def sync_account_destinations(account_id: int, deep_scan: bool = True) -> 
 
                         if is_bot or sender_uname.endswith("bot") or is_anon_admin:
                             bot_or_admin_count += 1
+                            if msg_txt:
+                                text_parts.append(msg_txt)
 
-                        if idx < 2 and msg_txt and not is_creator_or_admin:
-                            low_latest = msg_txt.lower()
-                            if any(lk in low_latest for lk in ("chat access restricted", "sending messages is not allowed", "group is currently locked", "chat is locked")):
-                                cannot_post_map[d.id] = "Restricted: Chat Access Locked by Bot/Admin"
-
-                        if msg_txt and (is_bot or sender_uname.endswith("bot") or any(ind in msg_txt.lower() for ind in rule_indicators)):
-                            text_parts.append(msg_txt)
-
-                    # If a group has >= 4 recent messages and 100% of them are from Bots or anonymous channel admins (e.g. VEXORIX BOT LOGS, Vorten Ai Logs), normal users cannot post
+                    # If a group has >= 4 recent messages and 100% of them are from Bots or anonymous channel admins (e.g. VEXORIX BOT LOGS, GGSoma Group), normal users cannot post
                     if not is_creator_or_admin and len(real_msgs) >= 4 and bot_or_admin_count == len(real_msgs):
                         cannot_post_map.setdefault(d.id, "Restricted: Bot Logs / Admin-Only Group")
                 except Exception:
