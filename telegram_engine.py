@@ -1397,43 +1397,15 @@ def reset_daily_quota_if_needed(conn, acc: dict) -> int:
     return acc["sent_today"]
 
 
-async def _forward_with_drop_author(
-    client: TelegramClient,
-    source_msg_id: int,
-    target_peer: int,
-    topic_id: Optional[int] = None,
-    drop_author: bool = True,
-) -> int:
-    """Server-side forward with drop_author=True (or False fallback) that works on all message/table types."""
-    if topic_id and int(topic_id) > 0:
-        req_kwargs = {
-            "from_peer": "me",
-            "id": [int(source_msg_id)],
-            "to_peer": target_peer,
-            "top_msg_id": int(topic_id),
-            "drop_author": drop_author,
-            "random_id": [random.randint(-2**63, 2**63 - 1)],
-        }
-        sent_upd = await client(functions.messages.ForwardMessagesRequest(**req_kwargs))
-        msg_id = getattr(sent_upd, "id", 0)
-        if not msg_id and hasattr(sent_upd, "updates"):
-            for upd in getattr(sent_upd, "updates", []) or []:
-                if hasattr(upd, "message") and hasattr(upd.message, "id"):
-                    msg_id = upd.message.id
-                    break
-                elif hasattr(upd, "id") and isinstance(upd.id, int):
-                    msg_id = upd.id
-                    break
-        return msg_id or 0
-    else:
-        res = await client.forward_messages(
-            entity=target_peer,
-            messages=int(source_msg_id),
-            from_peer="me",
-            drop_author=drop_author,
-        )
-        msg_id = res.id if hasattr(res, "id") else (res[0].id if isinstance(res, list) and res else 0)
-        return msg_id or 0
+def _extract_sent_msg_id(sent_upd) -> int:
+    msg_id = getattr(sent_upd, "id", 0)
+    if not msg_id and hasattr(sent_upd, "updates"):
+        for upd in getattr(sent_upd, "updates", []) or []:
+            if hasattr(upd, "message") and hasattr(upd.message, "id"):
+                return int(upd.message.id)
+            elif type(upd).__name__ == "UpdateMessageID" and hasattr(upd, "id"):
+                msg_id = int(upd.id)
+    return int(msg_id or 0)
 
 
 async def send_saved_message_as_clean_copy(
@@ -1443,24 +1415,18 @@ async def send_saved_message_as_clean_copy(
     topic_id: Optional[int] = None,
     strip_custom_emoji: bool = False,
     allow_media: bool = True,
+    fallback_text: str = "",
 ):
     """
-    Fetches the message from 'Saved Messages' ('me') and sends it WITHOUT the 'Forwarded from' header!
-    - If strip_custom_emoji=False (No-Forward groups that allow Premium Emojis): uses Telegram's native
-      drop_author=True forward (or clean send_message fallback) so the 'Forwarded from' tag is 100% removed
-      while keeping Premium Emojis & Rich Tables intact.
+    Fetches the message from 'Saved Messages' ('me') and sends it as a 100% BRAND-NEW message
+    (using SendMessageRequest / client.send_message — NEVER ForwardMessagesRequest!) so there is
+    NEVER any 'Forwarded from ...' header!
+    - If strip_custom_emoji=False (No-Forward groups that allow Premium Emojis): preserves all
+      Premium Emojis (MessageEntityCustomEmoji) and Rich Tables (InputRichMessage) without forwarding.
     - If strip_custom_emoji=True ('Withut emji ❌' / 'No Emoji / Text Only' groups): strips all
-      MessageEntityCustomEmoji / TextCustomEmoji so premium emojis automatically fall back to normal standard
-      emojis / plain text, and also sends without the 'Forwarded from' header.
+      MessageEntityCustomEmoji / TextCustomEmoji so premium emojis automatically fall back to standard
+      emojis / plain text, and sends without the 'Forwarded from' header.
     """
-    if not strip_custom_emoji:
-        try:
-            return await _forward_with_drop_author(
-                client, int(source_msg_id), target_peer, topic_id, drop_author=True
-            )
-        except Exception:
-            pass
-
     src_msg = await client.get_messages("me", ids=int(source_msg_id))
     if not src_msg:
         raise ValueError(f"Saved message #{source_msg_id} not found in 'Saved Messages'")
@@ -1486,9 +1452,54 @@ async def send_saved_message_as_clean_copy(
             except Exception:
                 pass
 
+    if not msg_body and fallback_text and not fallback_text.strip().startswith("[Forwarded from"):
+        msg_body = fallback_text.strip()
+
     entities = list(src_msg.entities or []) if raw_msg_str.strip() else []
     if strip_custom_emoji and entities:
         entities = [e for e in entities if not isinstance(e, types.MessageEntityCustomEmoji)]
+
+    # 1. If message is a RichMessage Table (e.g. SMF SHOP Table) and group allows Premium Emojis (only blocks Forward):
+    #    Send as a brand-new InputRichMessage via SendMessageRequest (NOT ForwardMessagesRequest!) -> ZERO Forward tag!
+    rich_msg = getattr(src_msg, "rich_message", None)
+    if not strip_custom_emoji and rich_msg and getattr(rich_msg, "blocks", None) and hasattr(types, "InputRichMessage"):
+        try:
+            in_peer = await client.get_input_entity(target_peer)
+            in_photos = [
+                types.InputPhoto(id=p.id, access_hash=p.access_hash, file_reference=p.file_reference)
+                for p in (getattr(rich_msg, "photos", None) or [])
+                if hasattr(p, "id") and hasattr(p, "access_hash")
+            ]
+            in_docs = [
+                types.InputDocument(id=d.id, access_hash=d.access_hash, file_reference=d.file_reference)
+                for d in (getattr(rich_msg, "documents", None) or [])
+                if hasattr(d, "id") and hasattr(d, "access_hash")
+            ]
+            input_rm = types.InputRichMessage(
+                blocks=list(rich_msg.blocks),
+                rtl=getattr(rich_msg, "rtl", None),
+                photos=in_photos or None,
+                documents=in_docs or None,
+            )
+            reply_hdr = (
+                types.InputReplyToMessage(reply_to_msg_id=int(topic_id), top_msg_id=int(topic_id))
+                if (topic_id and int(topic_id) > 0 and hasattr(types, "InputReplyToMessage"))
+                else None
+            )
+            sent_upd = await client(
+                functions.messages.SendMessageRequest(
+                    peer=in_peer,
+                    message=raw_msg_str or "",
+                    no_webpage=True,
+                    reply_to=reply_hdr,
+                    entities=entities if entities else None,
+                    rich_message=input_rm,
+                )
+            )
+            return _extract_sent_msg_id(sent_upd)
+        except Exception:
+            # If the group or account blocks RichMessage tables, fall through to clean text send_message below!
+            pass
 
     media_file = None
     if allow_media and not strip_custom_emoji and getattr(src_msg, "media", None):
@@ -1496,24 +1507,19 @@ async def send_saved_message_as_clean_copy(
             media_file = src_msg.media
 
     if not msg_body and media_file is None:
-        return await _forward_with_drop_author(
-            client, int(source_msg_id), target_peer, topic_id, drop_author=True
+        raise ValueError(
+            f"Saved Message #{source_msg_id} content could not be read. Please upgrade Telethon (`pip install -U telethon`) or re-save the message."
         )
 
-    try:
-        sent = await client.send_message(
-            entity=target_peer,
-            message=msg_body,
-            file=media_file,
-            formatting_entities=entities if entities else None,
-            link_preview=False,
-            reply_to=int(topic_id) if (topic_id and int(topic_id) > 0) else None,
-        )
-        return sent.id if hasattr(sent, "id") else 1
-    except ValueError:
-        return await _forward_with_drop_author(
-            client, int(source_msg_id), target_peer, topic_id, drop_author=True
-        )
+    sent = await client.send_message(
+        entity=target_peer,
+        message=msg_body,
+        file=media_file,
+        formatting_entities=entities if entities else None,
+        link_preview=False,
+        reply_to=int(topic_id) if (topic_id and int(topic_id) > 0) else None,
+    )
+    return sent.id if hasattr(sent, "id") else 0
 
 
 async def execute_campaign_round(campaign: dict):
@@ -1667,13 +1673,32 @@ async def execute_campaign_round(campaign: dict):
             topic_id = int(raw_topic) if (raw_topic and int(raw_topic) > 0) else None
             topic_note = f" [Topic: #{dest.get('forum_topic_title')}]" if dest.get("forum_topic_title") else ""
             delivery_note = f"Delivered OK{topic_note}"
-            strip_emoji = (dest_cat == "text_only" or "no_emoji" in dest_tags or "text_only" in dest_tags)
+            folder_low = (dest.get("folder_name") or "").lower()
+            rules_low = (dest.get("rules_summary") or "").lower()
+            strip_emoji = (
+                dest_cat == "text_only"
+                or "no_emoji" in dest_tags
+                or "text_only" in dest_tags
+                or "emj" in folder_low
+                or "emoj" in folder_low
+                or "no premium emoji" in rules_low
+            )
+            is_no_forward = (
+                not dest.get("allow_forwards", 1)
+                or dest_cat == "no_forward"
+                or "no_forward" in dest_tags
+                or "forw" in folder_low
+                or "no forward" in rules_low
+                or "forwarding restricted" in rules_low
+                or "clean copy" in rules_low
+            )
 
             # Live Pre-Send Policy Check: inspect live entity flags (noforwards, slowmode, banned_rights)
             try:
                 live_ent = await asyncio.wait_for(client.get_entity(target_peer), timeout=2.0)
                 if getattr(live_ent, "noforwards", False) and dest.get("allow_forwards", 1):
                     dest["allow_forwards"] = 0
+                    is_no_forward = True
                     if "no_forward" not in dest_tags:
                         dest_tags.append("no_forward")
                     conn_nf = get_conn()
@@ -1687,8 +1712,8 @@ async def execute_campaign_round(campaign: dict):
                 pass
 
             if tmpl["mode"] == "forward" and tmpl.get("source_message_id"):
-                # Check if group blocks forwards OR requires stripping premium emojis -> send as clean copy!
-                if strip_emoji or not dest.get("allow_forwards", 1) or dest_cat == "no_forward" or "no_forward" in dest_tags:
+                # Check if group blocks forwards OR requires stripping premium emojis -> send as 100% Clean New Message (NO Forward)!
+                if strip_emoji or is_no_forward:
                     msg_id = await send_saved_message_as_clean_copy(
                         client,
                         int(tmpl["source_message_id"]),
@@ -1696,6 +1721,7 @@ async def execute_campaign_round(campaign: dict):
                         topic_id,
                         strip_custom_emoji=strip_emoji,
                         allow_media=bool(dest.get("allow_media", 1)),
+                        fallback_text=tmpl.get("content") or "",
                     )
                     if strip_emoji:
                         delivery_note = "Sent without Premium Emojis & without Forward Tag (Clean Copy)"
@@ -1713,15 +1739,7 @@ async def execute_campaign_round(campaign: dict):
                                     random_id=[random.randint(-2**63, 2**63 - 1)],
                                 )
                             )
-                            msg_id = getattr(sent_msg, "id", 0)
-                            if not msg_id and hasattr(sent_msg, "updates"):
-                                for upd in getattr(sent_msg, "updates", []) or []:
-                                    if hasattr(upd, "message") and hasattr(upd.message, "id"):
-                                        msg_id = upd.message.id
-                                        break
-                                    elif hasattr(upd, "id") and isinstance(upd.id, int):
-                                        msg_id = upd.id
-                                        break
+                            msg_id = _extract_sent_msg_id(sent_msg)
                         else:
                             res = await client.forward_messages(
                                 entity=target_peer,
@@ -1738,6 +1756,7 @@ async def execute_campaign_round(campaign: dict):
                             topic_id,
                             strip_custom_emoji=strip_emoji,
                             allow_media=bool(dest.get("allow_media", 1)),
+                            fallback_text=tmpl.get("content") or "",
                         )
                         conn_learn = get_conn()
                         conn_learn.execute(
