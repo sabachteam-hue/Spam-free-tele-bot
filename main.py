@@ -104,6 +104,7 @@ class DestinationCategoryUpdate(BaseModel):
 class DestinationBulkAction(BaseModel):
     action: str
     ids: List[int] = []
+    category: Optional[str] = None
 
 
 # ==================== DASHBOARD OVERVIEW ====================
@@ -325,6 +326,12 @@ async def bulk_destination_action(payload: DestinationBulkAction):
             conn.execute(f"UPDATE destinations SET is_enabled = 0 WHERE id IN ({placeholders})", ids)
         elif act == "delete":
             conn.execute(f"UPDATE destinations SET is_deleted = 1, is_enabled = 0 WHERE id IN ({placeholders})", ids)
+        elif act == "set_category" and payload.category:
+            allow_fwd = 0 if payload.category == "no_forward" else 1
+            conn.execute(
+                f"UPDATE destinations SET category = ?, allow_forwards = ?, user_modified_category = 1 WHERE id IN ({placeholders})",
+                [payload.category, allow_fwd] + ids,
+            )
     conn.commit()
     conn.close()
     return {"ok": True, "action": act}

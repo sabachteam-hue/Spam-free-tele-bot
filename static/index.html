@@ -254,11 +254,17 @@
           </div>
           <div class="flex items-center gap-2.5 flex-wrap">
             <span id="group-count-badge" class="text-xs font-bold text-slate-500">0 groups shown</span>
-            <button onclick="removeAllRestrictedGroups()" class="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition">
+            <div id="bulk-group-actions" class="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <span id="bulk-selected-count" class="px-2 text-[11px] font-extrabold text-[#1a2b88]">0 selected</span>
+              <button onclick="runBulkGroupAction('enable')" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition">Enable Selected</button>
+              <button onclick="runBulkGroupAction('disable')" class="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold transition">Disable Selected</button>
+              <button onclick="runBulkGroupAction('delete')" class="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition">Delete Selected</button>
+            </div>
+            <button onclick="removeAllRestrictedGroups()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition">
               <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
               <span>Remove Restricted</span>
             </button>
-            <button onclick="runDeepAutoScan(this)" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white text-xs font-bold shadow transition">
+            <button onclick="runDeepAutoScan(this)" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1a2b88] hover:bg-blue-900 text-white text-xs font-bold shadow transition">
               <i data-lucide="radar" class="w-4 h-4"></i>
               <span>Auto-Scan Group Rules & Assign Tags</span>
             </button>
@@ -269,6 +275,9 @@
           <table class="w-full text-left border-collapse text-xs">
             <thead>
               <tr class="bg-slate-50 text-slate-500 border-b border-slate-100">
+                <th class="p-3 w-10 text-center">
+                  <input id="select-all-groups-cb" type="checkbox" onchange="toggleSelectAllVisibleGroups(this.checked)" class="w-4 h-4 rounded cursor-pointer" title="Select / Deselect All Shown Groups" />
+                </th>
                 <th class="p-3 font-bold">Group / Topic Title</th>
                 <th class="p-3 font-bold">Auto-Detected Tags & Rules</th>
                 <th class="p-3 font-bold">Slowmode</th>
@@ -614,6 +623,8 @@
       campaigns: [],
       proxies: [],
       selectedCampaignDestinations: new Set(),
+      selectedGroupRows: new Set(),
+      visibleGroupIds: [],
       qrPollTimer: null
     };
 
@@ -1009,7 +1020,56 @@
           method: 'POST',
           body: JSON.stringify({ action: 'delete_restricted', ids: [] })
         });
+        STATE.selectedGroupRows.clear();
         refreshAll();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function toggleGroupRowSelection(destId, checked) {
+      if (checked) STATE.selectedGroupRows.add(Number(destId));
+      else STATE.selectedGroupRows.delete(Number(destId));
+      updateBulkSelectedUI();
+    }
+
+    function toggleSelectAllVisibleGroups(checked) {
+      (STATE.visibleGroupIds || []).forEach(id => {
+        if (checked) STATE.selectedGroupRows.add(Number(id));
+        else STATE.selectedGroupRows.delete(Number(id));
+      });
+      renderGroups();
+    }
+
+    function updateBulkSelectedUI() {
+      const validIds = new Set(STATE.destinations.map(d => Number(d.id)));
+      Array.from(STATE.selectedGroupRows).forEach(id => {
+        if (!validIds.has(Number(id))) STATE.selectedGroupRows.delete(id);
+      });
+      const countEl = document.getElementById('bulk-selected-count');
+      if (countEl) countEl.innerText = `${STATE.selectedGroupRows.size} selected`;
+      const allCb = document.getElementById('select-all-groups-cb');
+      if (allCb) {
+        const vis = STATE.visibleGroupIds || [];
+        allCb.checked = vis.length > 0 && vis.every(id => STATE.selectedGroupRows.has(Number(id)));
+      }
+    }
+
+    async function runBulkGroupAction(action) {
+      const ids = Array.from(STATE.selectedGroupRows);
+      if (!ids.length) {
+        return alert('Please tick the checkboxes on the left to select at least 1 group first!');
+      }
+      if (action === 'delete') {
+        if (!confirm(`Permanently delete ${ids.length} selected group(s) from the list? (They will NOT come back even when you Sync again)`)) return;
+      }
+      try {
+        await api('/api/destinations/bulk-action', {
+          method: 'POST',
+          body: JSON.stringify({ action, ids })
+        });
+        if (action === 'delete') STATE.selectedGroupRows.clear();
+        await refreshAll();
       } catch (e) {
         alert(e.message);
       }
@@ -1048,14 +1108,21 @@
         return !q || searchStr.includes(q);
       });
 
+      STATE.visibleGroupIds = filtered.map(d => Number(d.id));
+      updateBulkSelectedUI();
+
       document.getElementById('group-count-badge').innerText = `${filtered.length} groups shown`;
       const tbody = document.getElementById('groups-table-body');
       tbody.innerHTML = filtered.length ? filtered.map(d => {
         const currentCat = d.category || (d.can_post ? 'standard' : 'restricted');
         const isEnabled = d.is_enabled !== 0;
+        const isSelected = STATE.selectedGroupRows.has(Number(d.id));
         const safeTitle = (d.title || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
         return `
-        <tr class="hover:bg-slate-50 ${!isEnabled ? 'opacity-60 bg-slate-50/70' : ''}">
+        <tr class="hover:bg-slate-50 ${!isEnabled ? 'opacity-60 bg-slate-50/70' : ''} ${isSelected ? 'bg-blue-50/40' : ''}">
+          <td class="p-3 text-center">
+            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleGroupRowSelection(${d.id}, this.checked)" class="w-4 h-4 rounded cursor-pointer" />
+          </td>
           <td class="p-3">
             <div class="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
               <span>${d.parent_title ? `<span class="text-slate-400">${d.parent_title} › </span>` : ''}${d.title}</span>
@@ -1099,7 +1166,7 @@
             </div>
           </td>
         </tr>
-      `}).join('') : `<tr><td colspan="6" class="p-6 text-center text-slate-400">No matching groups found.</td></tr>`;
+      `}).join('') : `<tr><td colspan="7" class="p-6 text-center text-slate-400">No matching groups found.</td></tr>`;
     }
 
     // ==================== TEMPLATES ====================
