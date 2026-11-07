@@ -124,12 +124,77 @@ async def get_dashboard():
     ).fetchone()[0]
     campaigns_running = conn.execute("SELECT COUNT(*) FROM campaigns WHERE status = 'running'").fetchone()[0]
     campaigns_total = conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
-    sent_total = conn.execute("SELECT COALESCE(SUM(total_sent), 0) FROM campaigns").fetchone()[0]
-    failed_total = conn.execute("SELECT COALESCE(SUM(total_failed), 0) FROM campaigns").fetchone()[0]
+    camp_sent = conn.execute("SELECT COALESCE(SUM(total_sent), 0) FROM campaigns").fetchone()[0]
+    camp_failed = conn.execute("SELECT COALESCE(SUM(total_failed), 0) FROM campaigns").fetchone()[0]
+    log_sent = conn.execute("SELECT COUNT(*) FROM delivery_logs WHERE status = 'sent'").fetchone()[0]
+    log_failed = conn.execute("SELECT COUNT(*) FROM delivery_logs WHERE status IN ('failed', 'cooldown')").fetchone()[0]
+    sent_total = max(int(camp_sent or 0), int(log_sent or 0))
+    failed_total = max(int(camp_failed or 0), int(log_failed or 0))
+
     recent_logs = [
         dict(r)
         for r in conn.execute("SELECT * FROM delivery_logs ORDER BY id DESC LIMIT 25").fetchall()
     ]
+
+    # Collect active cooldowns (campaigns in cooldown, accounts in cooldown, or recent cooldown logs)
+    active_cooldowns = []
+    now_dt = datetime.now(timezone.utc)
+    cd_camps = conn.execute(
+        """
+        SELECT c.id, c.name, c.next_run_at, c.last_error, a.name as account_name, a.cooldown_reason as acc_cooldown_reason
+        FROM campaigns c
+        LEFT JOIN accounts a ON c.account_id = a.id
+        WHERE c.status = 'cooldown'
+        ORDER BY c.id DESC
+        """
+    ).fetchall()
+    for cc in cd_camps:
+        rem_secs = 0
+        until_iso = cc["next_run_at"] or ""
+        if until_iso:
+            try:
+                ndt = datetime.fromisoformat(until_iso.replace("Z", "+00:00"))
+                if ndt.tzinfo is None:
+                    ndt = ndt.replace(tzinfo=timezone.utc)
+                rem_secs = max(0, int((ndt - now_dt).total_seconds()))
+            except Exception:
+                pass
+        reason_txt = cc["last_error"] or cc["acc_cooldown_reason"] or "2-Hour Anti-Ban Cooldown (3+ group deletions/restrictions)"
+        active_cooldowns.append(
+            {
+                "type": "campaign",
+                "campaign_id": cc["id"],
+                "title": f"Campaign: {cc['name']} (Account: {cc['account_name'] or 'Telegram'})",
+                "until_iso": until_iso,
+                "remaining_seconds": rem_secs,
+                "reason": reason_txt,
+            }
+        )
+
+    if not active_cooldowns:
+        cd_accs = conn.execute(
+            "SELECT id, name, cooldown_until, cooldown_reason FROM accounts WHERE cooldown_until IS NOT NULL"
+        ).fetchall()
+        for ca in cd_accs:
+            try:
+                adt = datetime.fromisoformat(ca["cooldown_until"].replace("Z", "+00:00"))
+                if adt.tzinfo is None:
+                    adt = adt.replace(tzinfo=timezone.utc)
+                if adt > now_dt:
+                    rem_secs = int((adt - now_dt).total_seconds())
+                    active_cooldowns.append(
+                        {
+                            "type": "account",
+                            "campaign_id": None,
+                            "title": f"Account Cooldown: {ca['name']}",
+                            "until_iso": ca["cooldown_until"],
+                            "remaining_seconds": rem_secs,
+                            "reason": ca["cooldown_reason"] or "2-Hour Anti-Ban Shield / FloodWait Cooldown",
+                        }
+                    )
+            except Exception:
+                pass
+
     conn.close()
     return {
         "accounts_total": accounts_total,
@@ -140,6 +205,7 @@ async def get_dashboard():
         "campaigns_total": campaigns_total,
         "sent_total": sent_total,
         "failed_total": failed_total,
+        "active_cooldowns": active_cooldowns,
         "recent_logs": recent_logs,
     }
 
@@ -444,14 +510,14 @@ async def list_campaigns():
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT c.*, a.name as account_name, a.phone as account_phone, t.name as template_name, t.mode as template_mode
+        SELECT c.*, a.name as account_name, a.phone as account_phone, a.cooldown_reason as account_cooldown_reason,
+               t.name as template_name, t.mode as template_mode
         FROM campaigns c
         LEFT JOIN accounts a ON c.account_id = a.id
         LEFT JOIN templates t ON c.template_id = t.id
         ORDER BY c.id DESC
         """
     ).fetchall()
-    conn.close()
     result = []
     now_dt = datetime.now(timezone.utc)
     for r in rows:
@@ -467,7 +533,18 @@ async def list_campaigns():
                 d["next_run_in_seconds"] = max(0, diff)
             except Exception:
                 d["next_run_in_seconds"] = 0
+        if d.get("status") == "cooldown" and not d.get("last_error"):
+            cd_log = conn.execute(
+                "SELECT reason FROM delivery_logs WHERE campaign_id = ? AND status = 'cooldown' ORDER BY id DESC LIMIT 1",
+                (d["id"],),
+            ).fetchone()
+            d["last_error"] = (
+                (cd_log["reason"] if cd_log else None)
+                or d.get("account_cooldown_reason")
+                or "⏱️ Cooldown Period: 2 Hours | 📋 Reason: Auto-paused by Anti-Ban Shield after 3+ group restrictions/deletions."
+            )
         result.append(d)
+    conn.close()
     return result
 
 
@@ -511,7 +588,7 @@ async def update_campaign_status(campaign_id: int, payload: CampaignStatusUpdate
     if payload.status == "running":
         row = conn.execute("SELECT account_id FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
         if row and row["account_id"]:
-            conn.execute("UPDATE accounts SET cooldown_until = NULL WHERE id = ?", (row["account_id"],))
+            conn.execute("UPDATE accounts SET cooldown_until = NULL, cooldown_reason = '' WHERE id = ?", (row["account_id"],))
         conn.execute(
             "UPDATE campaigns SET status = 'running', next_run_at = ?, last_error = NULL, current_round = CASE WHEN status = 'completed' THEN 0 ELSE current_round END WHERE id = ?",
             (now_iso(), campaign_id),

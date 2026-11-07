@@ -1424,7 +1424,7 @@ async def _forward_with_drop_author(
                 elif hasattr(upd, "id") and isinstance(upd.id, int):
                     msg_id = upd.id
                     break
-        return msg_id or 1
+        return msg_id or 0
     else:
         res = await client.forward_messages(
             entity=target_peer,
@@ -1433,7 +1433,7 @@ async def _forward_with_drop_author(
             drop_author=drop_author,
         )
         msg_id = res.id if hasattr(res, "id") else (res[0].id if isinstance(res, list) and res else 0)
-        return msg_id or 1
+        return msg_id or 0
 
 
 async def send_saved_message_as_clean_copy(
@@ -1549,12 +1549,14 @@ async def execute_campaign_round(campaign: dict):
     if acc.get("cooldown_until"):
         cd_dt = datetime.fromisoformat(acc["cooldown_until"])
         if cd_dt > datetime.now(timezone.utc):
+            rem_mins = max(1, int((cd_dt - datetime.now(timezone.utc)).total_seconds() // 60))
+            cd_reason = acc.get("cooldown_reason") or "Telegram Anti-Ban / FloodWait Protection"
             conn = get_conn()
             conn.execute(
-                "UPDATE campaigns SET next_run_at = ?, last_error = ? WHERE id = ?",
+                "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, last_error = ? WHERE id = ?",
                 (
-                    (cd_dt + timedelta(minutes=2)).isoformat(),
-                    f"Account in FloodWait cooldown until {cd_dt.strftime('%H:%M:%S UTC')}",
+                    (cd_dt + timedelta(minutes=1)).isoformat(),
+                    f"⏱️ Cooldown Period: {rem_mins}m remaining (Until {cd_dt.strftime('%H:%M:%S UTC')}) | 📋 Reason: {cd_reason}",
                     camp_id,
                 ),
             )
@@ -1625,6 +1627,8 @@ async def execute_campaign_round(campaign: dict):
         if dest.get("restriction_until"):
             rest_dt = datetime.fromisoformat(dest["restriction_until"])
             if rest_dt > datetime.now(timezone.utc):
+                rem_m = max(1, int((rest_dt - datetime.now(timezone.utc)).total_seconds() // 60))
+                r_why = dest.get("restriction_reason") or dest.get("rules_summary") or "Group Slowmode / Bot Mute Restriction"
                 log_delivery(
                     camp_id,
                     account_id,
@@ -1632,7 +1636,7 @@ async def execute_campaign_round(campaign: dict):
                     dest["title"],
                     next_round,
                     "skipped",
-                    f"Temporarily restricted until {rest_dt.strftime('%H:%M UTC')}",
+                    f"⏱️ Cooldown Period: {rem_m}m left (Until {rest_dt.strftime('%H:%M UTC')}) | 📋 Reason: {r_why}",
                 )
                 continue
 
@@ -1785,8 +1789,9 @@ async def execute_campaign_round(campaign: dict):
                 was_deleted = False
                 was_muted = False
                 bot_mute_reason = ""
+                mute_until_label = ""
 
-                if msg_id and int(msg_id) > 0:
+                if msg_id and int(msg_id) > 1:
                     try:
                         chk = await asyncio.wait_for(client.get_messages(target_peer, ids=int(msg_id)), timeout=2.5)
                         if chk is None:
@@ -1801,10 +1806,12 @@ async def execute_campaign_round(campaign: dict):
                             was_muted = True
                             p_ban = getattr(perms_now, "banned_rights", None)
                             u_dt = getattr(p_ban, "until_date", None) if p_ban else None
-                            rest_iso = u_dt.isoformat() if (u_dt and u_dt.year < 2099) else (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
+                            rest_dt_obj = u_dt if (u_dt and u_dt.year < 2099) else (datetime.now(timezone.utc) + timedelta(hours=12))
+                            rest_iso = rest_dt_obj.isoformat()
+                            mute_until_label = f"Until {rest_dt_obj.strftime('%H:%M UTC')}"
                             conn_m = get_conn()
                             conn_m.execute(
-                                "UPDATE destinations SET restriction_until = ?, rules_summary = 'Temporarily Muted by Group Bot/Admin' WHERE id = ?",
+                                "UPDATE destinations SET restriction_until = ?, restriction_reason = 'Account Temporarily Muted by Group Bot/Admin', rules_summary = 'Temporarily Muted by Group Bot/Admin' WHERE id = ?",
                                 (rest_iso, dest_id),
                             )
                             conn_m.commit()
@@ -1812,36 +1819,44 @@ async def execute_campaign_round(campaign: dict):
                 except Exception:
                     pass
 
-                after_msgs = await asyncio.wait_for(client.get_messages(target_peer, limit=4), timeout=2.0)
+                after_msgs = await asyncio.wait_for(client.get_messages(target_peer, limit=6), timeout=2.0)
                 for am in (after_msgs or []):
-                    sender = getattr(am, "sender", None)
-                    if not getattr(sender, "bot", False):
+                    if msg_id and int(msg_id) > 1 and getattr(am, "id", 0) <= int(msg_id):
                         continue
-                    btxt = (getattr(am, "message", None) or "").lower()
+                    sender = getattr(am, "sender", None)
+                    is_bot_or_mod = bool(getattr(sender, "bot", False)) or (getattr(am, "id", 0) != int(msg_id or 0))
+                    if not is_bot_or_mod:
+                        continue
+                    raw_btxt = (getattr(am, "message", None) or "").strip()
+                    btxt = raw_btxt.lower()
                     if not btxt:
                         continue
-                    if any(w in btxt for w in ["muted", "khóa mõm", "cấm chat", "đạt 2/2 cảnh cáo", "1/2 cảnh cáo", "restricted"]):
-                        bot_mute_reason = "Moderation Bot Warning/Mute"
                     learned_cat = None
                     learned_rule = None
-                    if any(w in btxt for w in ["emoji", "cấm icon", "custom emoji", "sticker"]):
+                    if any(w in btxt for w in ["emoji", "cấm icon", "custom emoji", "sticker", "premium emoji"]):
                         learned_cat = "text_only"
-                        learned_rule = "Bot Auto-Detected: No Premium Emojis"
+                        learned_rule = "No Premium Emojis / Stickers Allowed"
                     elif any(w in btxt for w in ["forward", "chuyển tiếp"]):
                         learned_cat = "no_forward"
-                        learned_rule = "Bot Auto-Detected: No Forwarding"
-                    elif any(w in btxt for w in ["24h", "24 giờ", "1 bài", "1 post", "once a day", "mỗi ngày", "đạt 2/2 cảnh cáo"]):
+                        learned_rule = "No Forwarding Allowed"
+                    elif any(w in btxt for w in ["24h", "24 giờ", "1 bài", "1 post", "once a day", "mỗi ngày", "đạt 2/2 cảnh cáo", "spam", "flood"]):
                         learned_cat = "24h_once"
-                        learned_rule = "Bot Auto-Detected: 1 Post / 24h Limit"
-                    elif any(w in btxt for w in ["no link", "cấm link", "không chèn link", "link not allowed"]):
+                        learned_rule = "1 Post / 24h Limit or Anti-Spam Filter"
+                    elif any(w in btxt for w in ["no link", "cấm link", "không chèn link", "link not allowed", "url"]):
                         learned_cat = "no_links"
-                        learned_rule = "Bot Auto-Detected: No Links"
+                        learned_rule = "Links Not Allowed in Group"
+                    elif any(w in btxt for w in ["muted", "khóa mõm", "cấm chat", "1/2 cảnh cáo", "restricted", "warn", "deleted", "xóa"]):
+                        learned_rule = f"Moderation Bot Warning ({raw_btxt[:70]})"
+
+                    if learned_rule and not bot_mute_reason:
+                        bot_mute_reason = learned_rule
+
                     if learned_cat and learned_cat != dest_cat:
                         new_tags = sorted(list(set(dest_tags + [learned_cat])))
                         conn_bot = get_conn()
                         conn_bot.execute(
-                            "UPDATE destinations SET category = ?, auto_tags = ?, allow_forwards = CASE WHEN ? = 'no_forward' THEN 0 ELSE allow_forwards END, rules_summary = ? WHERE id = ?",
-                            (learned_cat, json.dumps(new_tags), learned_cat, learned_rule, dest_id),
+                            "UPDATE destinations SET category = ?, auto_tags = ?, allow_forwards = CASE WHEN ? = 'no_forward' THEN 0 ELSE allow_forwards END, restriction_reason = ?, rules_summary = ? WHERE id = ?",
+                            (learned_cat, json.dumps(new_tags), learned_cat, f"Bot Auto-Detected: {learned_rule}", f"Bot Auto-Detected: {learned_rule}", dest_id),
                         )
                         conn_bot.commit()
                         conn_bot.close()
@@ -1849,9 +1864,21 @@ async def execute_campaign_round(campaign: dict):
 
                 if was_deleted or was_muted:
                     round_strike_count += 1
-                    why_lbl = "Muted + Msg Deleted" if (was_deleted and was_muted) else ("Account Muted" if was_muted else "Msg Deleted by Bot/Admin")
-                    if bot_mute_reason:
-                        why_lbl = f"{why_lbl} ({bot_mute_reason})"
+                    if not bot_mute_reason:
+                        rule_hint = dest.get("rules_summary") or ""
+                        if "no link" in rule_hint.lower() or "links disabled" in rule_hint.lower() or "no_links" in dest_tags:
+                            bot_mute_reason = "Group Rule: Links / Promo Format Blocked by Admin Bot"
+                        elif "24h" in rule_hint.lower() or "24h_once" in dest_tags:
+                            bot_mute_reason = "Group Rule: 1 Post per 24h Limit Enforced by Bot"
+                        elif "emoji" in rule_hint.lower() or "text_only" in dest_tags:
+                            bot_mute_reason = "Group Rule: Premium Emojis / Media Blocked by Bot"
+                        else:
+                            bot_mute_reason = "Group Moderation Bot Auto-Filter (Anti-Spam / Keyword / Unverified Seller Rule)"
+
+                    action_lbl = "Account Muted + Msg Deleted" if (was_deleted and was_muted) else ("Account Muted" if was_muted else "Msg Auto-Deleted by Bot/Admin")
+                    if mute_until_label:
+                        action_lbl = f"{action_lbl} [{mute_until_label}]"
+                    why_lbl = f"{action_lbl} — Reason: {bot_mute_reason}"
                     strike_details.append(f"{dest['title']}: {why_lbl}")
                     conn_st = get_conn()
                     conn_st.execute(
@@ -1867,7 +1894,7 @@ async def execute_campaign_round(campaign: dict):
                         dest["title"],
                         next_round,
                         "failed",
-                        f"⚠️ Post-Send Check: {why_lbl} (Strike {round_strike_count}/3)",
+                        f"⚠️ {why_lbl} (Strike {round_strike_count}/3)",
                         msg_id,
                     )
             except Exception:
@@ -1875,12 +1902,14 @@ async def execute_campaign_round(campaign: dict):
 
         except SlowModeWaitError as e:
             round_strike_count += 1
-            strike_details.append(f"{dest['title']}: SlowMode ({e.seconds}s)")
             safe_until = datetime.now(timezone.utc) + timedelta(seconds=e.seconds + 300)
+            wait_mins = max(1, (e.seconds + 300) // 60)
+            sm_reason = f"Group Slowmode Active ({e.seconds}s wait required between posts)"
+            strike_details.append(f"{dest['title']}: {sm_reason}")
             conn = get_conn()
             conn.execute(
-                "UPDATE destinations SET restriction_until = ?, category = CASE WHEN ? >= 3600 THEN '24h_once' ELSE 'slowmode' END WHERE id = ?",
-                (safe_until.isoformat(), e.seconds, dest_id),
+                "UPDATE destinations SET restriction_until = ?, restriction_reason = ?, category = CASE WHEN ? >= 3600 THEN '24h_once' ELSE 'slowmode' END WHERE id = ?",
+                (safe_until.isoformat(), sm_reason, e.seconds, dest_id),
             )
             conn.execute("UPDATE campaigns SET total_failed = total_failed + 1 WHERE id = ?", (camp_id,))
             conn.commit()
@@ -1892,21 +1921,28 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "cooldown",
-                f"SlowModeWait ({e.seconds}s) + 5m safety buffer (Strike {round_strike_count}/3)",
+                f"⏱️ Cooldown Period: {wait_mins}m (Until {safe_until.strftime('%H:%M UTC')}) | 📋 Reason: {sm_reason} (Strike {round_strike_count}/3)",
             )
 
         except FloodWaitError as e:
-            safe_until = datetime.now(timezone.utc) + timedelta(seconds=max(e.seconds + 300, 7200))
+            cooldown_secs = max(e.seconds + 300, 7200)
+            safe_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown_secs)
+            wait_mins = cooldown_secs // 60
+            fw_reason = (
+                f"⏱️ Cooldown Period: {wait_mins} mins (Until {safe_until.strftime('%H:%M UTC')}) | "
+                f"📋 Cooldown Reason: Telegram Rate-Limit FloodWait ({e.seconds}s) triggered on '{dest['title']}'. "
+                f"Auto-paused for {wait_mins}m to protect your Telegram ID from ban/limitation. Will auto-resume when safe, or click 'Start Now' to override."
+            )
             conn = get_conn()
             conn.execute(
-                "UPDATE accounts SET cooldown_until = ? WHERE id = ?",
-                (safe_until.isoformat(), account_id),
+                "UPDATE accounts SET cooldown_until = ?, cooldown_reason = ? WHERE id = ?",
+                (safe_until.isoformat(), f"Telegram FloodWait ({e.seconds}s) on {dest['title']}", account_id),
             )
             conn.execute(
                 "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, total_failed = total_failed + 1, last_error = ? WHERE id = ?",
                 (
                     safe_until.isoformat(),
-                    f"⛔ FloodWait ({e.seconds}s): Auto-paused for 2h+ cooldown to protect your Telegram ID. Will auto-resume when safe, or click 'Resume / Run' to start manually.",
+                    fw_reason,
                     camp_id,
                 ),
             )
@@ -1919,17 +1955,24 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "cooldown",
-                f"FloodWait {e.seconds}s — Pausing campaign for safety cooldown",
+                fw_reason,
             )
             return
 
         except (ChatWriteForbiddenError, UserBannedInChannelError, ChannelPrivateError, ChatAdminRequiredError) as e:
             round_strike_count += 1
-            strike_details.append(f"{dest['title']}: Restricted/Muted ({type(e).__name__})")
+            err_name = type(e).__name__
+            human_err = {
+                "ChatWriteForbiddenError": "Group Admin Locked Chat / Revoked Send Permission",
+                "UserBannedInChannelError": "Account Muted or Restricted by Group Admin",
+                "ChannelPrivateError": "Group became Private or Account Removed",
+                "ChatAdminRequiredError": "Admin-Only Posting Group",
+            }.get(err_name, f"Posting Restricted ({err_name})")
+            strike_details.append(f"{dest['title']}: Reason: {human_err}")
             conn = get_conn()
             conn.execute(
-                "UPDATE destinations SET can_post = 0, category = 'restricted', auto_tags = '[\"restricted\"]', rules_summary = ? WHERE id = ?",
-                (f"Auto-Restricted during campaign: {type(e).__name__}", dest_id),
+                "UPDATE destinations SET can_post = 0, category = 'restricted', auto_tags = '[\"restricted\"]', restriction_reason = ?, rules_summary = ? WHERE id = ?",
+                (human_err, f"Auto-Restricted: {human_err}", dest_id),
             )
             conn.execute("UPDATE campaigns SET total_failed = total_failed + 1 WHERE id = ?", (camp_id,))
             conn.commit()
@@ -1941,16 +1984,24 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "failed",
-                f"Posting forbidden ({type(e).__name__}) — Auto-moved to Restricted (Strike {round_strike_count}/3)",
+                f"⛔ Restricted — Reason: {human_err} (Auto-moved to Restricted · Strike {round_strike_count}/3)",
             )
 
         except PeerFloodError:
             safe_until = datetime.now(timezone.utc) + timedelta(hours=2)
+            pf_reason = (
+                f"⏱️ Cooldown Period: 2 Hours (Until {safe_until.strftime('%H:%M UTC')}) | "
+                f"📋 Cooldown Reason: Telegram PeerFlood Warning on '{dest['title']}' (Too many messages sent too quickly). "
+                f"Auto-stopped for 2 hours to protect your Telegram ID from SpamBot limitation. Will auto-resume after 2h, or click 'Start Now' to override."
+            )
             conn = get_conn()
-            conn.execute("UPDATE accounts SET cooldown_until = ? WHERE id = ?", (safe_until.isoformat(), account_id))
             conn.execute(
-                "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, last_error = '⛔ PeerFlood Warning: Auto-stopped for 2 hours to protect your Telegram ID from limitation. Will auto-resume after 2h, or click Resume / Run to start manually.' WHERE id = ?",
-                (safe_until.isoformat(), camp_id),
+                "UPDATE accounts SET cooldown_until = ?, cooldown_reason = ? WHERE id = ?",
+                (safe_until.isoformat(), f"Telegram PeerFlood Warning on {dest['title']}", account_id),
+            )
+            conn.execute(
+                "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, last_error = ? WHERE id = ?",
+                (safe_until.isoformat(), pf_reason, camp_id),
             )
             conn.commit()
             conn.close()
@@ -1961,35 +2012,45 @@ async def execute_campaign_round(campaign: dict):
                 dest["title"],
                 next_round,
                 "cooldown",
-                "PeerFlood Warning — Auto-cooling campaign for 2h",
+                pf_reason,
             )
             return
 
         except Exception as e:
             err_str = str(e)
-            round_strike_count += 1
-            strike_details.append(f"{dest['title']}: {err_str[:60]}")
+            is_local_err = isinstance(e, ValueError) or ("cannot be empty" in err_str.lower())
+            if not is_local_err:
+                round_strike_count += 1
+                strike_details.append(f"{dest['title']} (Reason: {err_str[:80]})")
             conn = get_conn()
             conn.execute(
                 "UPDATE campaigns SET total_failed = total_failed + 1, last_error = ? WHERE id = ?",
-                (err_str[:200], camp_id),
+                (f"Error in {dest['title']}: {err_str[:180]}", camp_id),
             )
             conn.commit()
             conn.close()
-            log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "failed", f"{err_str[:160]} (Strike {round_strike_count}/3)")
+            strike_suffix = f" (Strike {round_strike_count}/3)" if not is_local_err else ""
+            log_delivery(camp_id, account_id, dest_id, dest["title"], next_round, "failed", f"❌ Delivery Error — Reason: {err_str[:160]}{strike_suffix}")
 
         # ⚡ SMART ANTI-BAN CIRCUIT BREAKER:
         # If messages were deleted, muted, or restricted in MORE THAN 2 groups (> 2, i.e., 3+ groups),
-        # immediately stop the campaign, show the exact error message, and put it on a 2-hour cooldown
+        # immediately stop the campaign, show the exact Cooldown Period & Reason, and put it on a 2-hour cooldown
         # so the Telegram account never gets limited! Auto-resumes after 2 hours (or manually via Resume/Run button).
         if round_strike_count > 2:
-            cooldown_2h = datetime.now(timezone.utc) + timedelta(hours=2)
+            now_utc = datetime.now(timezone.utc)
+            cooldown_2h = now_utc + timedelta(hours=2)
+            reasons_joined = " | ".join(strike_details)
             stop_reason = (
-                f"⛔ Auto-Stopped (Anti-Ban Protection): Messages were deleted, muted, or restricted in {round_strike_count} groups "
-                f"({'; '.join(strike_details)}). Campaign paused for 2 hours cooldown to protect your Telegram ID from limitation. "
-                f"It will automatically resume after 2 hours, or you can click 'Resume / Run' anytime to start manually."
+                f"⏱️ Cooldown Period: 2 Hours ({now_utc.strftime('%H:%M UTC')} → {cooldown_2h.strftime('%H:%M UTC')}) | "
+                f"📋 Cooldown Reason: Anti-Ban Shield auto-paused campaign because {round_strike_count} groups deleted/muted/restricted your post "
+                f"[{reasons_joined}]. "
+                f"Paused for 2 hours to protect your Telegram ID from SpamBot limitation (Auto-resumes in 2h, or click 'Start Now' anytime)."
             )
             conn_cb = get_conn()
+            conn_cb.execute(
+                "UPDATE accounts SET cooldown_until = ?, cooldown_reason = ? WHERE id = ?",
+                (cooldown_2h.isoformat(), f"{round_strike_count} Group Restrictions/Deletions ({reasons_joined[:180]})", account_id),
+            )
             conn_cb.execute(
                 "UPDATE campaigns SET status = 'cooldown', next_run_at = ?, last_error = ? WHERE id = ?",
                 (cooldown_2h.isoformat(), stop_reason, camp_id),

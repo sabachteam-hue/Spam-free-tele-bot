@@ -100,10 +100,15 @@ def init_db():
         "is_deleted": "INTEGER NOT NULL DEFAULT 0",
         "user_modified_category": "INTEGER NOT NULL DEFAULT 0",
         "last_sent_at": "TEXT DEFAULT NULL",
+        "restriction_reason": "TEXT DEFAULT ''",
     }
     for col, col_def in migrations.items():
         if col not in existing_cols:
             cur.execute(f"ALTER TABLE destinations ADD COLUMN {col} {col_def}")
+
+    existing_acc_cols = [r[1] for r in cur.execute("PRAGMA table_info(accounts)").fetchall()]
+    if "cooldown_reason" not in existing_acc_cols:
+        cur.execute("ALTER TABLE accounts ADD COLUMN cooldown_reason TEXT DEFAULT ''")
 
     # Deduplicate any rows where topic_id was NULL and normalize topic_id NULL -> 0
     cur.execute("""
@@ -165,6 +170,21 @@ def init_db():
         message_id INTEGER DEFAULT NULL,
         created_at TEXT
     )
+    """)
+
+    # Upgrade any legacy/vague cooldown & failed log messages so the exact Cooldown Period & Reason are always visible
+    cur.execute("""
+        UPDATE delivery_logs
+        SET reason = REPLACE(
+            REPLACE(
+                reason,
+                'The message cannot be empty unless a file is provided',
+                'Reason: Forwarded Table/Media Required Clean-Copy Fallback (Fixed)'
+            ),
+            'Msg Deleted by Bot/Admin',
+            'Reason: Message Auto-Deleted by Group Moderation Bot/Admin (Rule/Spam Filter)'
+        )
+        WHERE reason LIKE '%cannot be empty%' OR reason LIKE '%Msg Deleted by Bot/Admin%'
     """)
 
     conn.commit()

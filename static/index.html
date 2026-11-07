@@ -168,6 +168,9 @@
           </div>
         </div>
 
+        <!-- Active Cooldown Period & Reason Banner -->
+        <div id="dash-cooldown-alerts" class="hidden space-y-3"></div>
+
         <!-- Recent Activity Table -->
         <div class="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
           <div class="p-4 border-b border-slate-100 flex items-center justify-between">
@@ -846,6 +849,41 @@
       return `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase ${cls}">${status}</span>`;
     }
 
+    function formatLogReasonHtml(l) {
+      let raw = String(l.reason || '').trim();
+      if (!raw) {
+        if (l.status === 'cooldown') {
+          raw = '⏱️ Cooldown Period: 2 Hours | 📋 Cooldown Reason: Anti-Ban Shield auto-paused campaign due to group moderation restrictions/mute.';
+        } else {
+          return '-';
+        }
+      }
+      // Upgrade any legacy log strings on the fly in UI as well
+      raw = raw
+        .replace(/The message cannot be empty unless a file is provided/gi, 'Reason: Forwarded Table/Media Required Clean-Copy Fallback (Fixed)')
+        .replace(/Msg Deleted by Bot\/Admin(?!\s*—)/gi, 'Msg Auto-Deleted by Bot/Admin — Reason: Group Moderation Rule / Anti-Spam Filter');
+
+      if (l.status === 'cooldown') {
+        const startDt = l.created_at ? new Date(l.created_at) : null;
+        const endDt = startDt ? new Date(startDt.getTime() + 2 * 3600 * 1000) : null;
+        const timeRange = (startDt && endDt)
+          ? `${startDt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} → ${endDt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`
+          : '2 Hours';
+        if (raw.includes('📋')) {
+          const parts = raw.split('|').map(s => s.trim());
+          return `<div class="space-y-1">
+            <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 text-[11px] font-extrabold">${parts[0]}</div>
+            <div class="text-xs text-slate-800 font-semibold">${parts.slice(1).join(' · ')}</div>
+          </div>`;
+        }
+        return `<div class="space-y-1">
+          <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 text-[11px] font-extrabold">⏱️ Cooldown Period: 2 Hours (${timeRange})</div>
+          <div class="text-xs text-slate-800 font-semibold">📋 Cooldown Reason: ${raw}</div>
+        </div>`;
+      }
+      return raw;
+    }
+
     async function refreshAll(isManual = false) {
       const btnText = document.getElementById('top-refresh-text');
       const btnIcon = document.getElementById('top-refresh-icon');
@@ -877,6 +915,34 @@
         document.getElementById('stat-sent').innerText = dash.sent_total;
         document.getElementById('stat-failed').innerText = dash.failed_total;
 
+        const cdAlertBox = document.getElementById('dash-cooldown-alerts');
+        if (cdAlertBox) {
+          const activeCds = dash.active_cooldowns || [];
+          if (activeCds.length > 0) {
+            cdAlertBox.classList.remove('hidden');
+            cdAlertBox.innerHTML = activeCds.map(cd => {
+              const minsLeft = Math.max(1, Math.ceil((cd.remaining_seconds || 0) / 60));
+              const untilTime = cd.until_iso ? new Date(cd.until_iso).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '2 Hours';
+              return `
+                <div class="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-sm">
+                  <div class="space-y-1">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="px-2.5 py-0.5 rounded-full bg-amber-500 text-white text-[11px] font-extrabold uppercase">Active Cooldown Period</span>
+                      <span class="font-extrabold text-sm text-slate-900">${cd.title}</span>
+                      <span class="px-2.5 py-0.5 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-extrabold">⏱️ ${minsLeft} mins remaining (Auto-Resumes at ${untilTime})</span>
+                    </div>
+                    <div class="text-xs text-slate-800 font-semibold">${cd.reason}</div>
+                  </div>
+                  ${cd.campaign_id ? `<button onclick="setCampaignStatus(${cd.campaign_id}, 'running')" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shrink-0 shadow">Start Now (Override Cooldown)</button>` : ''}
+                </div>
+              `;
+            }).join('');
+          } else {
+            cdAlertBox.classList.add('hidden');
+            cdAlertBox.innerHTML = '';
+          }
+        }
+
         const dashLogs = document.getElementById('dash-logs-body');
         dashLogs.innerHTML = dash.recent_logs.length ? dash.recent_logs.map(l => `
           <tr class="hover:bg-slate-50">
@@ -884,7 +950,7 @@
             <td class="p-3 font-bold text-slate-800">${l.destination_title || '-'}</td>
             <td class="p-3 font-semibold">#${l.round_number || 1}</td>
             <td class="p-3">${statusBadge(l.status)}</td>
-            <td class="p-3 text-slate-600">${l.reason || ''}</td>
+            <td class="p-3 text-slate-600">${formatLogReasonHtml(l)}</td>
           </tr>
         `).join('') : `<tr><td colspan="5" class="p-6 text-center text-slate-400">No deliveries recorded yet. Start a campaign to see live anti-spam logs!</td></tr>`;
 
@@ -967,7 +1033,12 @@
               <span class="font-bold text-slate-700">${a.proxy_name || 'Direct VPS'}</span>
             </div>
           </div>
-          ${a.cooldown_until ? `<div class="text-[11px] bg-amber-50 text-amber-800 px-3 py-1.5 rounded-lg font-semibold">Cooldown active until: ${new Date(a.cooldown_until).toLocaleTimeString()}</div>` : ''}
+          ${a.cooldown_until && new Date(a.cooldown_until) > new Date() ? `
+            <div class="text-[11px] bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2 rounded-xl space-y-0.5">
+              <div class="font-extrabold">⏱️ Cooldown Period: Active until ${new Date(a.cooldown_until).toLocaleTimeString()}</div>
+              <div class="font-medium text-amber-800">📋 Reason: ${a.cooldown_reason || '2-Hour Anti-Ban Shield / FloodWait Protection'}</div>
+            </div>
+          ` : ''}
           <div class="flex flex-wrap gap-2 pt-1">
             ${a.status !== 'connected' ? `
               <button onclick="startPhoneLogin(${a.id})" class="px-3.5 py-2 rounded-xl bg-[#1a2b88] text-white text-xs font-bold">Login via Phone OTP</button>
@@ -1333,7 +1404,10 @@
               : (d.can_post
                   ? `<span class="badge-green px-2.5 py-0.5 rounded-full text-[11px] font-bold">Can Post</span>`
                   : `<span class="badge-red px-2.5 py-0.5 rounded-full text-[11px] font-bold">Restricted</span>`)}
-            ${d.restriction_until ? `<span class="text-[10px] text-amber-700 block mt-0.5">Until ${new Date(d.restriction_until).toLocaleTimeString()}</span>` : ''}
+            ${d.restriction_until && new Date(d.restriction_until) > new Date() ? `
+              <span class="text-[10px] text-amber-800 font-bold block mt-1">⏱️ Until ${new Date(d.restriction_until).toLocaleTimeString()}</span>
+              <span class="text-[10px] text-slate-500 block">Reason: ${d.restriction_reason || d.rules_summary || 'Group Slowmode / Bot Mute'}</span>
+            ` : ''}
           </td>
           <td class="p-3 text-right">
             <div class="inline-flex items-center gap-1.5">
@@ -1823,7 +1897,12 @@
               }</span>
             </div>
           </div>
-          ${c.last_error ? `<div class="text-xs ${c.status === 'cooldown' || String(c.last_error).includes('⛔') ? 'bg-rose-50 border border-rose-300 text-rose-800 font-bold' : 'bg-amber-50 border border-amber-200 text-amber-800 font-medium'} px-3.5 py-2.5 rounded-xl">${c.last_error}</div>` : ''}
+          ${(c.status === 'cooldown' || c.last_error) ? `
+            <div class="text-xs ${c.status === 'cooldown' || String(c.last_error || '').includes('⛔') || String(c.last_error || '').includes('⏱️') ? 'bg-amber-50 border-2 border-amber-300 text-slate-900' : 'bg-rose-50 border border-rose-200 text-rose-800'} px-4 py-3 rounded-xl space-y-1">
+              ${c.status === 'cooldown' ? `<div class="font-extrabold text-amber-900">⏱️ Cooldown Period Active: Auto-Resumes in ${Math.floor((c.next_run_in_seconds || 0) / 60)}m ${(c.next_run_in_seconds || 0) % 60}s ${c.next_run_at ? `(at ${new Date(c.next_run_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})})` : ''}</div>` : ''}
+              <div class="font-semibold">${c.last_error || '📋 Cooldown Reason: Auto-paused by Anti-Ban Shield after 3+ group restrictions/deletions to protect your Telegram ID.'}</div>
+            </div>
+          ` : ''}
         </div>
       `).join('');
     }
@@ -1929,7 +2008,7 @@
           <td class="p-3 font-bold text-slate-800">${l.destination_title || '-'}</td>
           <td class="p-3">#${l.round_number || 1}</td>
           <td class="p-3">${statusBadge(l.status)}</td>
-          <td class="p-3 text-slate-600">${l.reason || ''}</td>
+          <td class="p-3 text-slate-600">${formatLogReasonHtml(l)}</td>
         </tr>
       `).join('') : `<tr><td colspan="7" class="p-6 text-center text-slate-400">No logs yet.</td></tr>`;
     }
